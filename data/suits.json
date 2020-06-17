@@ -1,0 +1,489 @@
+{
+  "Unknown": {
+    "abbreviation": "?",
+    "clueColors": [],
+    "fill": "#cccccc"
+  },
+  "Red": {
+    "pip": "hanabiRed"
+  },
+  "Yellow": {
+    "pip": "hanabiYellow"
+  },
+  "Green": {
+    "pip": "hanabiGreen"
+  },
+  "Blue": {
+    "pip": "hanabiBlue"
+  },
+  "Purple": {
+    "pip": "hanabiWhite"
+  },
+  "Teal": {
+    "pip": "hanabiAltWhite"
+  },
+  "Black": {
+    "createVariants": true,
+    "oneOfEach": true,
+    "pip": "hanabiAltBlue"
+  },
+  "Rainbow": {
+    "abbreviation": "M",
+    "allClueColors": true,
+    "createVariants": true,
+    "fill": "multi",
+    "fillColors": [
+      "#ff0000",
+      "#ffff00",
+      "#02ec00",
+      "#0037ff",
+      "#8000ff"
+    ],
+    "pip": "rainbow"
+  },
+  "Pink": {
+    "allClueRanks": true,
+    "createVariants": true,
+    "pip": "hashtag"
+  },
+  "White": {
+    "createVariants": true,
+    "fill": "#d9d9d9",
+    "noClueColors": true,
+    "pip": "moon"
+  },
+  "Brown": {
+    "createVariants": true,
+    "noClueRanks": true,
+    "pip": "kanji"
+  },
+  "Omni": {
+    "allClueColors": true,
+    "allClueRanks": true,
+    "createVariants": true,
+    "fill": "multi",
+    "fillColors": [
+      "#ffffff",
+      "#8000ff",
+      "#0037ff",
+      "#02ec00",
+      "#ffff00",
+      "#ff0000",
+      "#ffffff"
+    ],
+    "pip": "infinity"
+  },
+  "Null": {
+    "abbreviation": "U",
+    "createVariants": true,
+    "noClueColors": true,
+    "noClueRanks": true,
+    "fill": "#ffffff",
+    "pip": "emptySet"
+  },
+  "Muddy Rainbow": {
+    "abbreviation": "M",
+    "allClueColors": true,
+    "createVariants": true,
+    "noClueRanks": true,
+    "fill": "multi",
+    "fillColors": [
+      "#bb4321",
+      "#bb8021",
+      "#808000",
+      "#8080ff",
+      "#500030"
+    ],
+    "pip": "rainbow"
+  },
+  "Light Pink": {
+    "abbreviation": "I",
+    "allClueRanks": true,
+    "createVariants": true,
+    "fill": "#ffbbdd",
+    "noClueColors": true,
+    "pip": "hashtag"
+  },
+  "Dark Rainbow": {
+    "abbreviation": "M",
+    "allClueColors": true,
+    "createVariants": true,
+    "fill": "multi",
+    "fillColors": [
+      "#a00000",
+      "#a0a000",
+      "#00a000",
+      "#0000a0",
+      "#5000a0"
+    ],
+    "oneOfEach": true,
+    "pip": "rainbow"
+  },
+  "Dark Pink": {
+    "abbreviation": "I",
+    "clueColors": [
+      "Pink"
+    ],
+    "createVariants": true,
+    "allClueRanks": true,
+    "fill": "#800040",
+    "oneOfEach": true,
+    "pip": "hashtag"
+  },
+  "Gray": {
+    "abbreviation": "A",
+    "createVariants": true,
+    "noClueColors": true,
+    "fill": "#555555",
+    "oneOfEach": true,
+    "pip": "moon"
+  },
+  "Dark Brown": {
+    "abbreviation": "N",
+    "clueColors": [
+      "Brown"
+    ],
+    "createVariants": true,
+    "noClueRanks": true,
+    "fill": "#271a0c",
+    "oneOfEach": true,
+    "pip": "kanji"
+  },
+  "Dark Omni": {
+    "abbreviation": "O",
+    "allClueColors": true,
+    "allClueRanks": true,
+    "createVariants": true,
+    "fill": "multi",
+    "fillColors": [
+      "#000000",
+      "#5000a0",
+      "#0000a0",
+      "#00a000",
+      "#a0a000",
+      "#a00000",
+      "#000000"
+    ],
+    "oneOfEach": true,
+    "pip": "infinity"
+  },
+  "Dark Null": {
+    "abbreviation": "U",
+    "createVariants": true,
+    "noClueColors": true,
+    "noClueRanks": true,
+    "fill": "#a6a6a6",
+    "oneOfEach": true,
+    "pip": "emptySet"
+  },
+  "Cocoa Rainbow": {
+    "abbreviation": "M",
+    "allClueColors": true,
+    "createVariants": true,
+    "fill": "multi",
+    "fillColors": [
+      "#662211",
+      "#664011",
+      "#404000",
+      "#404080",
+      "#280018"
+    ],
+    "noClueRanks": true,
+    "oneOfEach": true,
+    "pip": "rainbow"
+  },
+  "Gray Pink": {
+    "abbreviation": "I",
+    "allClueRanks": true,
+    "createVariants": true,
+    "fill": "#b05080",
+    "noClueColors": true,
+    "oneOfEach": true,
+    "pip": "hashtag"
+  },
+  "Tomato": {
+    "clueColors": [
+      "Red"
+    ],
+    "fill": "#e60000",
+    "pip": "hanabiRed"
+  },
+  "Mahogany": {
+    "clueColors": [
+      "Red"
+    ],
+    "fill": "#660000",
+    "pip": "hanabiWhite"
+  },
+  "Lime": {
+    "clueColors": [
+      "Green"
+    ],
+    "fill": "#1aff1a",
+    "pip": "hanabiYellow"
+  },
+  "Forest": {
+    "clueColors": [
+      "Green"
+    ],
+    "fill": "#008000",
+    "pip": "hanabiGreen"
+  },
+  "Sky": {
+    "clueColors": [
+      "Blue"
+    ],
+    "fill": "#1a66ff",
+    "pip": "hanabiBlue"
+  },
+  "Navy": {
+    "clueColors": [
+      "Blue"
+    ],
+    "fill": "#002b80",
+    "pip": "hanabiAltWhite"
+  },
+  "Tomato VA": {
+    "clueColors": [
+      "Red"
+    ],
+    "fill": "#ff1a1a",
+    "name": "Tomato",
+    "pip": "hanabiGreen"
+  },
+  "Ruby VA": {
+    "clueColors": [
+      "Red"
+    ],
+    "name": "Ruby",
+    "pip": "hanabiRed"
+  },
+  "Mahogany VA": {
+    "clueColors": [
+      "Red"
+    ],
+    "fill": "#330000",
+    "name": "Mahogany",
+    "pip": "hanabiWhite"
+  },
+  "Sky VA": {
+    "clueColors": [
+      "Blue"
+    ],
+    "fill": "#4d88ff",
+    "name": "Sky",
+    "pip": "hanabiBlue"
+  },
+  "Berry VA": {
+    "clueColors": [
+      "Blue"
+    ],
+    "name": "Berry",
+    "pip": "hanabiAltWhite"
+  },
+  "Navy VA": {
+    "clueColors": [
+      "Blue"
+    ],
+    "fill": "#001a4d",
+    "name": "Navy",
+    "pip": "hanabiYellow"
+  },
+  "Ice EA": {
+    "clueColors": [
+      "Blue"
+    ],
+    "fill": "#e6eeff",
+    "name": "Ice",
+    "pip": "hanabiBlue"
+  },
+  "Sapphire EA": {
+    "clueColors": [
+      "Blue"
+    ],
+    "fill": "#99bbff",
+    "name": "Sapphire",
+    "pip": "hanabiAltWhite"
+  },
+  "Sky EA": {
+    "clueColors": [
+      "Blue"
+    ],
+    "fill": "#3377ff",
+    "name": "Sky",
+    "pip": "hanabiYellow"
+  },
+  "Berry EA": {
+    "clueColors": [
+      "Blue"
+    ],
+    "name": "Berry",
+    "pip": "hanabiGreen"
+  },
+  "Navy EA": {
+    "clueColors": [
+      "Blue"
+    ],
+    "fill": "#002266",
+    "name": "Navy",
+    "pip": "hanabiRed"
+  },
+  "Ocean EA": {
+    "clueColors": [
+      "Blue"
+    ],
+    "fill": "#00091a",
+    "name": "Ocean",
+    "pip": "hanabiWhite"
+  },
+  "Orange D": {
+    "clueColors": [
+      "Red",
+      "Yellow"
+    ],
+    "fill": "#ff8800",
+    "name": "Orange",
+    "pip": "hanabiAltWhite"
+  },
+  "Purple D": {
+    "clueColors": [
+      "Red",
+      "Blue"
+    ],
+    "name": "Purple",
+    "pip": "hanabiWhite"
+  },
+  "Mahogany D": {
+    "clueColors": [
+      "Red",
+      "Black"
+    ],
+    "fill": "#660016",
+    "name": "Mahogany",
+    "pip": "hanabiRed"
+  },
+  "Green D": {
+    "clueColors": [
+      "Yellow",
+      "Blue"
+    ],
+    "name": "Green",
+    "pip": "hanabiGreen"
+  },
+  "Tan D": {
+    "clueColors": [
+      "Yellow",
+      "Black"
+    ],
+    "fill": "#999900",
+    "name": "Tan",
+    "pip": "hanabiYellow"
+  },
+  "Navy D": {
+    "clueColors": [
+      "Blue",
+      "Black"
+    ],
+    "fill": "#000066",
+    "name": "Navy",
+    "pip": "hanabiBlue"
+  },
+  "Orange D2": {
+    "clueColors": [
+      "Red",
+      "Yellow"
+    ],
+    "fill": "#ff8800",
+    "name": "Orange",
+    "pip": "hanabiRed"
+  },
+  "Lime D": {
+    "clueColors": [
+      "Yellow",
+      "Green"
+    ],
+    "fill": "#80c000",
+    "name": "Lime",
+    "pip": "hanabiYellow"
+  },
+  "Teal D": {
+    "clueColors": [
+      "Green",
+      "Blue"
+    ],
+    "name": "Teal",
+    "pip": "hanabiGreen"
+  },
+  "Indigo D": {
+    "clueColors": [
+      "Blue",
+      "Purple"
+    ],
+    "fill": "#1a0082",
+    "name": "Indigo",
+    "pip": "hanabiBlue"
+  },
+  "Cardinal D": {
+    "clueColors": [
+      "Purple",
+      "Red"
+    ],
+    "fill": "#810735",
+    "name": "Cardinal",
+    "pip": "hanabiWhite"
+  },
+  "Tangelo AD": {
+    "clueColors": [
+      "Red",
+      "Yellow"
+    ],
+    "fill": "#ffac4d",
+    "name": "Tangelo",
+    "pip": "hanabiRed"
+  },
+  "Peach AD": {
+    "clueColors": [
+      "Red",
+      "Yellow"
+    ],
+    "fill": "#b35f00",
+    "name": "Peach",
+    "pip": "hanabiAltWhite"
+  },
+  "Orchid AD": {
+    "clueColors": [
+      "Red",
+      "Blue"
+    ],
+    "fill": "#8c1aff",
+    "name": "Orchid",
+    "pip": "hanabiBlue"
+  },
+  "Violet AD": {
+    "clueColors": [
+      "Red",
+      "Blue"
+    ],
+    "fill": "#400080",
+    "name": "Violet",
+    "pip": "hanabiWhite"
+  },
+  "Lime AD": {
+    "clueColors": [
+      "Yellow",
+      "Blue"
+    ],
+    "fill": "#1aff1a",
+    "name": "Lime",
+    "pip": "hanabiYellow"
+  },
+  "Forest AD": {
+    "clueColors": [
+      "Yellow",
+      "Blue"
+    ],
+    "fill": "#008000",
+    "name": "Forest",
+    "pip": "hanabiGreen"
+  }
+}

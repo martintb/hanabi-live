@@ -1,3 +1,5 @@
+# Note that this script does not get the "<3" emote; that must be added manually
+
 # Imports
 import os
 import re
@@ -5,7 +7,7 @@ import requests
 import sys
 
 # Configuration
-emotes_file = 'twitch.txt' # Copy-pasted from the source code of: https://twitchemotes.com
+emotes_file = 'twitch.txt'  # Copy-pasted from the source code of: https://twitchemotes.com
 directory = 'twitch'
 
 if not os.path.exists(directory):
@@ -20,7 +22,8 @@ for line in lines:
     line = line.strip()
     if line == '' or line == '<div class="row">' or line == '</div>':
         continue
-    match = re.search(r'<img src="(.+?)" data-tooltip="<strong>(.+?)</strong>"', line)
+    match = re.search(
+        r'<img src="(.+?)" data-tooltip="<strong>(.+?)</strong>"', line)
     if not match:
         print('Failed to parse line: ' + line)
         sys.exit(1)

@@ -3,22 +3,21 @@
 set -e # Exit on any errors
 set -x # Enable debugging
 
-# This is the directory that this script lives in
-# From: https://stackoverflow.com/questions/59895/getting-the-source-directory-of-a-bash-script-from-within
+# Get the directory of this script
+# https://stackoverflow.com/questions/59895/getting-the-source-directory-of-a-bash-script-from-within
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
 # Ensure that the ".env" file exists
-if [ ! -f "$DIR/../.env" ]; then
-    cp "$DIR/../.env_template" "$DIR/../.env"
+if [[ ! -f "$DIR/../.env" ]]; then
+  cp "$DIR/../.env_template" "$DIR/../.env"
 fi
 
-# Install the Golang dependencies for the project
-cd "$DIR/../src"
-go get -u -v ./...
+# Build the server, which will automatically install the Golang dependencies
+"$DIR/../server/build_server.sh"
 
-# Install the JavaScript dependencies
-cd "$DIR/../public/js"
+# Install the JavaScript/TypeScript dependencies and build the client
+cd "$DIR/../client"
 npm install
+"$DIR/../client/build_client.sh"
 
-# Build the client code
-"$DIR/../build_client.sh"
+echo "Successfully installed dependencies."

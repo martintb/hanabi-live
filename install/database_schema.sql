@@ -1,210 +1,309 @@
 /*
-    Setting up the database is accomplished in the "install_database_schema.sh" script
-*/
-
-USE hanabi;
+ * Notes:
+ * - Hanabi Live uses PostreSQL
+ * - Initalizing the database is accomplished in the "install_database_schema.sh" script
+ * - "SERIAL" is a keyword in PostgreSQL to have an automatic-incrementing column:
+ *   https://www.postgresqltutorial.com/postgresql-serial
+ * - PostgreSQL automatically creates indexes for columns with primary keys, foreign keys, and
+ *   constraints, so we only have to bother explicitly creating a few indexes
+ * - PostgreSQL automatically handles Unicode text, emojis, and so forth
+ * - "ON DELETE CASCADE" means that if the parent row is deleted, the child row will also be
+ *   automatically deleted
+ */
 
 /*
-    We have to disable foreign key checks so that we can drop the tables;
-    this will only disable it for the current session
+ * By default, PostgreSQL will show us notices about dropping tables
+ * (even with the "--quiet" flag enabled);  we only want messages to display on warnings or errors
  */
-SET FOREIGN_KEY_CHECKS = 0;
+SET client_min_messages TO WARNING;
 
-DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS users CASCADE;
 CREATE TABLE users (
-    id                   INT           NOT NULL  PRIMARY KEY  AUTO_INCREMENT,
-    /* PRIMARY KEY automatically creates a UNIQUE constraint */
-    username             NVARCHAR(20)  NOT NULL  UNIQUE, /* MySQL is case insensitive by default, which is what we want */
-    password             CHAR(64)      NOT NULL, /* A SHA-256 hash string is 64 characters long */
-    last_ip              VARCHAR(40)   NULL, /* This will be set immediately after insertion */
-    admin                INT           NOT NULL  DEFAULT 0,
-    tester               INT           NOT NULL  DEFAULT 0,
-    datetime_created     TIMESTAMP     NOT NULL  DEFAULT NOW(),
-    datetime_last_login  TIMESTAMP     NOT NULL  DEFAULT NOW()
+    id                   SERIAL       PRIMARY KEY,
+    username             TEXT         NOT NULL  UNIQUE,
+    /*
+     * PostgreSQL is not case-sensitive unique by default,
+     * meaning that it will allow a username of "Alice" and "alice" to exist
+     * Furthermore, because of Unicode, it would be possible for "Αlice" with a Greek letter A
+     * (0x391) and "Alice" with a normal A (0x41) to exist
+     * To guard against users impersonating each other & phishing attacks, we also store a
+     * normalized version of the username that is converted to ASCII with the go-unidecode library
+     * and then lower-cased
+     * Importantly, we must verify that all new usernames are unique in code before adding them to
+     * the database
+     */
+    normalized_username  TEXT         NOT NULL  UNIQUE,
+    /*
+     * TODO set "password_hash" to NOT NULL in April 2022; passwords not set at that time can be
+     * manually reset by an administrator if needed
+     */
+    password_hash        TEXT         NULL, /* An Argon2id hash */
+    old_password_hash    TEXT         NULL, /* A SHA-256 hash */
+    last_ip              TEXT         NOT NULL,
+    datetime_created     TIMESTAMPTZ  NOT NULL  DEFAULT NOW(),
+    datetime_last_login  TIMESTAMPTZ  NOT NULL  DEFAULT NOW()
 );
-CREATE INDEX users_index_username ON users (username);
 
 /* Any default settings must also be applied to the "userSettings.go" file */
-DROP TABLE IF EXISTS user_settings;
+DROP TABLE IF EXISTS user_settings CASCADE;
 CREATE TABLE user_settings (
-    id                                  INT          NOT NULL  PRIMARY KEY  AUTO_INCREMENT,
-    /* PRIMARY KEY automatically creates a UNIQUE constraint */
-    user_id                             INT          NOT NULL,
-    send_turn_notify                    BOOLEAN      NOT NULL  DEFAULT 0,
-    send_turn_sound                     BOOLEAN      NOT NULL  DEFAULT 1,
-    send_timer_sound                    BOOLEAN      NOT NULL  DEFAULT 1,
-    show_keldon_UI                      BOOLEAN      NOT NULL  DEFAULT 0,
-    show_colorblind_UI                  BOOLEAN      NOT NULL  DEFAULT 0,
-    show_timer_in_untimed               BOOLEAN      NOT NULL  DEFAULT 0,
-    reverse_hands                       BOOLEAN      NOT NULL  DEFAULT 0,
-    real_life_mode                      BOOLEAN      NOT NULL  DEFAULT 0,
-    speedrun_preplay                    BOOLEAN      NOT NULL  DEFAULT 0,
-    create_table_variant                VARCHAR(50)  NOT NULL  DEFAULT "No Variant",
-    create_table_timed                  BOOLEAN      NOT NULL  DEFAULT 0,
-    create_table_base_time_minutes      FLOAT        NOT NULL  DEFAULT 2,
-    create_table_time_per_turn_seconds  INT          NOT NULL  DEFAULT 20,
-    create_table_speedrun               BOOLEAN      NOT NULL  DEFAULT 0,
-    create_table_deck_plays             BOOLEAN      NOT NULL  DEFAULT 0,
-    create_table_empty_clues            BOOLEAN      NOT NULL  DEFAULT 0,
-    create_table_character_assignments  BOOLEAN      NOT NULL  DEFAULT 0,
-    create_table_correspondence         BOOLEAN      NOT NULL  DEFAULT 0,
-    create_table_alert_waiters          BOOLEAN      NOT NULL  DEFAULT 0,
+    user_id                              INTEGER   NOT NULL,
+    desktop_notification                 BOOLEAN   NOT NULL  DEFAULT FALSE,
+    sound_move                           BOOLEAN   NOT NULL  DEFAULT TRUE,
+    sound_timer                          BOOLEAN   NOT NULL  DEFAULT TRUE,
+    keldon_mode                          BOOLEAN   NOT NULL  DEFAULT FALSE,
+    colorblind_mode                      BOOLEAN   NOT NULL  DEFAULT FALSE,
+    real_life_mode                       BOOLEAN   NOT NULL  DEFAULT FALSE,
+    reverse_hands                        BOOLEAN   NOT NULL  DEFAULT FALSE,
+    style_numbers                        BOOLEAN   NOT NULL  DEFAULT FALSE,
+    show_timer_in_untimed                BOOLEAN   NOT NULL  DEFAULT FALSE,
+    speedrun_preplay                     BOOLEAN   NOT NULL  DEFAULT FALSE,
+    speedrun_mode                        BOOLEAN   NOT NULL  DEFAULT FALSE,
+    hyphenated_conventions               BOOLEAN   NOT NULL  DEFAULT FALSE,
+    volume                               SMALLINT  NOT NULL  DEFAULT 50,
+    create_table_variant                 TEXT      NOT NULL  DEFAULT 'No Variant',
+    create_table_timed                   BOOLEAN   NOT NULL  DEFAULT FALSE,
+    create_table_time_base_minutes       FLOAT     NOT NULL  DEFAULT 2,
+    create_table_time_per_turn_seconds   INTEGER   NOT NULL  DEFAULT 20,
+    create_table_speedrun                BOOLEAN   NOT NULL  DEFAULT FALSE,
+    create_table_card_cycle              BOOLEAN   NOT NULL  DEFAULT FALSE,
+    create_table_deck_plays              BOOLEAN   NOT NULL  DEFAULT FALSE,
+    create_table_empty_clues             BOOLEAN   NOT NULL  DEFAULT FALSE,
+    create_table_one_extra_card          BOOLEAN   NOT NULL  DEFAULT FALSE,
+    create_table_one_less_card           BOOLEAN   NOT NULL  DEFAULT FALSE,
+    create_table_all_or_nothing          BOOLEAN   NOT NULL  DEFAULT FALSE,
+    create_table_detrimental_characters  BOOLEAN   NOT NULL  DEFAULT FALSE,
+    create_table_alert_waiters           BOOLEAN   NOT NULL  DEFAULT FALSE,
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
-    /* If the user is deleted, automatically delete all of the rows */
 );
-CREATE INDEX user_settings_index_user_id ON user_settings (user_id);
 
-DROP TABLE IF EXISTS user_stats;
+/* User stats are per variant */
+DROP TABLE IF EXISTS user_stats CASCADE;
 CREATE TABLE user_stats (
-    id               INT  NOT NULL  PRIMARY KEY  AUTO_INCREMENT,
-    /* PRIMARY KEY automatically creates a UNIQUE constraint */
-    user_id          INT    NOT NULL,
-    variant          INT    NOT NULL, /* Equal to the variant ID (found in "variants.go") */
-    num_played       INT    NOT NULL  DEFAULT 0,
-    best_score2      INT    NOT NULL  DEFAULT 0, /* Their best score for 2-player games on this variant */
-    best_score2_mod  INT    NOT NULL  DEFAULT 0, /* This stores if they used additional options to make the game easier */
-    best_score3      INT    NOT NULL  DEFAULT 0,
-    best_score3_mod  INT    NOT NULL  DEFAULT 0,
-    best_score4      INT    NOT NULL  DEFAULT 0,
-    best_score4_mod  INT    NOT NULL  DEFAULT 0,
-    best_score5      INT    NOT NULL  DEFAULT 0,
-    best_score5_mod  INT    NOT NULL  DEFAULT 0,
-    best_score6      INT    NOT NULL  DEFAULT 0,
-    best_score6_mod  INT    NOT NULL  DEFAULT 0,
-    average_score    FLOAT  NOT NULL  DEFAULT 0,
-    strikeout_rate   FLOAT  NOT NULL  DEFAULT 0,
-    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
-    /* If the user is deleted, automatically delete all of the rows */
+    user_id          INTEGER   NOT NULL,
+    variant          SMALLINT  NOT NULL,
+    num_games        INTEGER   NOT NULL  DEFAULT 0,
+    /* Their best score for 2-player games on this variant */
+    best_score2      SMALLINT  NOT NULL  DEFAULT 0,
+    /* This stores if they used additional options to make the game easier */
+    best_score2_mod  SMALLINT  NOT NULL  DEFAULT 0,
+    best_score3      SMALLINT  NOT NULL  DEFAULT 0,
+    best_score3_mod  SMALLINT  NOT NULL  DEFAULT 0,
+    best_score4      SMALLINT  NOT NULL  DEFAULT 0,
+    best_score4_mod  SMALLINT  NOT NULL  DEFAULT 0,
+    best_score5      SMALLINT  NOT NULL  DEFAULT 0,
+    best_score5_mod  SMALLINT  NOT NULL  DEFAULT 0,
+    best_score6      SMALLINT  NOT NULL  DEFAULT 0,
+    best_score6_mod  SMALLINT  NOT NULL  DEFAULT 0,
+    average_score    FLOAT     NOT NULL  DEFAULT 0,
+    num_strikeouts   INTEGER   NOT NULL  DEFAULT 0,
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, variant)
 );
-CREATE INDEX user_stats_index_user_id ON user_stats (user_id);
 
-DROP TABLE IF EXISTS games;
+DROP TABLE IF EXISTS user_friends CASCADE;
+CREATE TABLE user_friends (
+    user_id    INTEGER  NOT NULL,
+    friend_id  INTEGER  NOT NULL,
+    FOREIGN KEY (user_id)   REFERENCES users (id) ON DELETE CASCADE,
+    FOREIGN KEY (friend_id) REFERENCES users (id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, friend_id)
+);
+
+DROP TABLE IF EXISTS user_reverse_friends CASCADE;
+CREATE TABLE user_reverse_friends (
+    user_id    INTEGER  NOT NULL,
+    friend_id  INTEGER  NOT NULL,
+    FOREIGN KEY (user_id)   REFERENCES users (id) ON DELETE CASCADE,
+    FOREIGN KEY (friend_id) REFERENCES users (id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, friend_id)
+);
+
+DROP TABLE IF EXISTS games CASCADE;
 CREATE TABLE games (
-    id                 INT           NOT NULL  PRIMARY KEY  AUTO_INCREMENT,
-    /* PRIMARY KEY automatically creates a UNIQUE constraint */
-    name                   NVARCHAR(50)  NOT NULL,
-    num_players            TINYINT       NOT NULL,
-    owner                  INT           NOT NULL,
-    variant                INT           NOT NULL, /* Equal to the variant ID (found in "variants.json") */
-    timed                  BOOLEAN       NOT NULL, /* 0 - not timed, 1 - timed */
-    time_base              INT           NOT NULL, /* in seconds */
-    time_per_turn          INT           NOT NULL, /* in seconds */
-    speedrun               BOOLEAN       NOT NULL,
-    deck_plays             BOOLEAN       NOT NULL,
-    empty_clues            BOOLEAN       NOT NULL,
-    character_assignments  BOOLEAN       NOT NULL,
-    seed                   VARCHAR(50)   NOT NULL, /* e.g. "p2v0s1" */
-    score                  INT           NOT NULL,
-    num_turns              INT           NOT NULL,
-    end_condition          INT           NOT NULL, /* 0 - in progress, 1 - normal, 2 - strikeout, 3 - timeout, 4 - abandoned */
-    datetime_created       TIMESTAMP     NOT NULL,
-    datetime_started       TIMESTAMP     NOT NULL,
-    datetime_finished      TIMESTAMP     NOT NULL,
-    FOREIGN KEY (owner) REFERENCES users (id)
+    id                      SERIAL       PRIMARY KEY,
+    name                    TEXT         NOT NULL,
+    num_players             SMALLINT     NOT NULL,
+    /*
+     * By default, the starting player is always at index (seat) 0
+     * This field is only needed for legacy games before April 2020
+     */
+    starting_player         SMALLINT     NOT NULL  DEFAULT 0,
+    /* Equal to the variant ID (found in "variants.json") */
+    variant                 SMALLINT     NOT NULL,
+    timed                   BOOLEAN      NOT NULL,
+    time_base               INTEGER      NOT NULL, /* in seconds */
+    time_per_turn           INTEGER      NOT NULL, /* in seconds */
+    speedrun                BOOLEAN      NOT NULL,
+    card_cycle              BOOLEAN      NOT NULL,
+    deck_plays              BOOLEAN      NOT NULL,
+    empty_clues             BOOLEAN      NOT NULL,
+    one_extra_card          BOOLEAN      NOT NULL,
+    one_less_card           BOOLEAN      NOT NULL,
+    all_or_nothing          BOOLEAN      NOT NULL,
+    detrimental_characters  BOOLEAN      NOT NULL,
+    seed                    TEXT         NOT NULL, /* e.g. "p2v0s1" */
+    score                   SMALLINT     NOT NULL,
+    num_turns               SMALLINT     NOT NULL,
+    /* See the "endCondition" values in "constants.go" */
+    end_condition           SMALLINT     NOT NULL,
+    datetime_started        TIMESTAMPTZ  NOT NULL,
+    datetime_finished       TIMESTAMPTZ  NOT NULL
 );
 CREATE INDEX games_index_num_players ON games (num_players);
-CREATE INDEX games_index_variant ON games (variant);
-CREATE INDEX games_index_seed ON games (seed);
+CREATE INDEX games_index_variant     ON games (variant);
+CREATE INDEX games_index_seed        ON games (seed);
 
-DROP TABLE IF EXISTS game_participants;
+DROP TABLE IF EXISTS game_participants CASCADE;
 CREATE TABLE game_participants (
-    id       INT              NOT NULL  PRIMARY KEY  AUTO_INCREMENT,
-    /* PRIMARY KEY automatically creates a UNIQUE constraint */
-    user_id               INT              NOT NULL,
-    game_id               INT              NOT NULL,
-    notes                 NVARCHAR(10000)  NOT NULL,
-    character_assignment  INT              NOT NULL,
-    character_metadata    INT              NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users (id),
-    FOREIGN KEY (game_id) REFERENCES games (id) ON DELETE CASCADE
-    /* If the game is deleted, automatically delete all of the rows */
+    id                    SERIAL    PRIMARY KEY,
+    game_id               INTEGER   NOT NULL,
+    user_id               INTEGER   NOT NULL,
+    seat                  SMALLINT  NOT NULL, /* Needed for the "GetNotes()" function */
+    character_assignment  SMALLINT  NOT NULL,
+    character_metadata    SMALLINT  NOT NULL,
+    FOREIGN KEY (game_id) REFERENCES games (id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+    CONSTRAINT game_participants_unique UNIQUE (game_id, user_id)
 );
-CREATE INDEX game_participants_index_user_id ON game_participants (user_id);
-CREATE INDEX game_participants_index_game_id ON game_participants (game_id);
 
-DROP TABLE IF EXISTS game_actions;
+DROP TABLE IF EXISTS game_participant_notes CASCADE;
+CREATE TABLE game_participant_notes (
+    game_participant_id  INTEGER   NOT NULL,
+    card_order           SMALLINT  NOT NULL, /* "order" is a reserved word in PostgreSQL */
+    note                 TEXT      NOT NULL,
+    FOREIGN KEY (game_participant_id) REFERENCES game_participants (id) ON DELETE CASCADE,
+    PRIMARY KEY (game_participant_id, card_order)
+);
+
+DROP TABLE IF EXISTS game_actions CASCADE;
 CREATE TABLE game_actions (
-    id       INT            NOT NULL  PRIMARY KEY  AUTO_INCREMENT,
-    /* PRIMARY KEY automatically creates a UNIQUE constraint */
-    game_id  INT            NOT NULL,
-    action   VARCHAR(1500)  NOT NULL, /* JSON */
-    FOREIGN KEY (game_id) REFERENCES games (id) ON DELETE CASCADE
-    /* If the game is deleted, automatically delete all of the rows */
+    game_id  INTEGER   NOT NULL,
+    turn     SMALLINT  NOT NULL,
+    /* 0 - play, 1 - discard, 2 - color clue, 3 - rank clue, 4 - game over */
+    type     SMALLINT  NOT NULL,
+    /*
+     * If a play or a discard, corresponds to the order of the the card that was played/discarded
+     * If a clue, corresponds to the index of the player that received the clue
+     * If a game over, corresponds to the index of the player that caused the game to end
+     */
+    target   SMALLINT  NOT NULL,
+    /*
+     * If a play or discard, then 0 (as NULL)
+     * It uses less database space and reduces code complexity to use a value of 0 for NULL
+     * than to use a SQL NULL
+     * https://dev.mysql.com/doc/refman/8.0/en/data-size.html
+     * If a color clue, then 0 if red, 1 if yellow, etc.
+     * If a rank clue, then 1 if 1, 2 if 2, etc.
+     * If a game over, then the value corresponds to the "endCondition" values in "constants.go"
+     */
+    value    SMALLINT  NOT NULL,
+    FOREIGN KEY (game_id) REFERENCES games (id) ON DELETE CASCADE,
+    PRIMARY KEY (game_id, turn)
 );
-CREATE INDEX game_actions_index_game_id ON game_actions (game_id);
 
-/* Eventually this table will replace the "game_actions" table */
-DROP TABLE IF EXISTS game_clues;
-CREATE TABLE game_clues (
-    id       INT            NOT NULL  PRIMARY KEY  AUTO_INCREMENT,
-    /* PRIMARY KEY automatically creates a UNIQUE constraint */
-    game_id  INT      NOT NULL,
-    giver    TINYINT  NOT NULL, /* The index of the player that performed the clue */
-    target   TINYINT  NOT NULL, /* The index of the player that received the clue */
-    type     TINYINT  NOT NULL, /* 0 - number, 1 - color */
-    value    TINYINT  NOT NULL, /* 1 if 1, 2 if 2, etc., or 1 if blue, 2 if etc. */
-    FOREIGN KEY (game_id) REFERENCES games (id) ON DELETE CASCADE
-    /* If the game is deleted, automatically delete all of the rows */
+DROP TABLE IF EXISTS game_tags CASCADE;
+CREATE TABLE game_tags (
+    game_id  INTEGER  NOT NULL,
+    user_id  INTEGER  NOT NULL,
+    tag      TEXT     NOT NULL,
+    FOREIGN KEY (game_id) REFERENCES games (id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+    CONSTRAINT game_tags_unique UNIQUE (game_id, tag)
 );
-CREATE INDEX game_clues_index_game_id ON game_clues (game_id);
 
-/* Eventually this table will replace the "game_actions" table */
-DROP TABLE IF EXISTS game_plays;
-CREATE TABLE game_plays ( /* This include both playing a card and discarding a card */
-    id         INT      NOT NULL  PRIMARY KEY  AUTO_INCREMENT,
-    /* PRIMARY KEY automatically creates a UNIQUE constraint */
-    game_id    INT      NOT NULL,
-    play_type  TINYINT  NOT NULL, /* 0 - play, 2 - discard, 3 - misplay */
-    player     TINYINT  NOT NULL, /* The index of the player that did the action */
-    card       TINYINT  NOT NULL, /* The order of the card that was played/discarded or -1 if a deck-play*/
-    FOREIGN KEY (game_id) REFERENCES games (id) ON DELETE CASCADE
-    /* If the game is deleted, automatically delete all of the rows */
+DROP TABLE IF EXISTS variant_stats CASCADE;
+CREATE TABLE variant_stats (
+    /* Equal to the variant ID (found in "variants.go") */
+    variant         SMALLINT  NOT NULL  PRIMARY KEY,
+    num_games       INTEGER   NOT NULL  DEFAULT 0,
+    /* The overall best score for a 2-player games on this variant */
+    best_score2     SMALLINT  NOT NULL  DEFAULT 0,
+    best_score3     SMALLINT  NOT NULL  DEFAULT 0,
+    best_score4     SMALLINT  NOT NULL  DEFAULT 0,
+    best_score5     SMALLINT  NOT NULL  DEFAULT 0,
+    best_score6     SMALLINT  NOT NULL  DEFAULT 0,
+    num_max_scores  INTEGER   NOT NULL  DEFAULT 0,
+    average_score   FLOAT     NOT NULL  DEFAULT 0,
+    num_strikeouts  INTEGER   NOT NULL  DEFAULT 0
 );
-CREATE INDEX game_plays_index_game_id ON game_plays (game_id);
 
-DROP TABLE IF EXISTS chat_log;
+DROP TABLE IF EXISTS chat_log CASCADE;
 CREATE TABLE chat_log (
-    id             INT             NOT NULL  PRIMARY KEY  AUTO_INCREMENT,
-    /* PRIMARY KEY automatically creates a UNIQUE constraint */
-    user_id        INT             NOT NULL, /* 0 is a Discord message */
-    discord_name   NVARCHAR(150)   NULL, /* only used if it is a Discord message */
-    room           NVARCHAR(50)    NOT NULL, /* either "lobby" or "game-####" */
-    message        NVARCHAR(1000)  NOT NULL,
-    datetime_sent  TIMESTAMP       NOT NULL  DEFAULT NOW()
+    id             SERIAL       PRIMARY KEY,
+    user_id        INTEGER      NOT NULL, /* 0 is a Discord message */
+    discord_name   TEXT         NULL,     /* Only used if it is a Discord message */
+    message        TEXT         NOT NULL,
+    room           TEXT         NOT NULL, /* Either "lobby" or "table####" */
+    datetime_sent  TIMESTAMPTZ  NOT NULL  DEFAULT NOW()
+    /*
+     * There is no foreign key for "user_id" because it would not exist for Discord messages or
+     * server messages
+     */
 );
-CREATE INDEX chat_log_index_user_id ON chat_log (user_id);
+CREATE INDEX chat_log_index_user_id       ON chat_log (user_id);
+CREATE INDEX chat_log_index_room          ON chat_log (room);
 CREATE INDEX chat_log_index_datetime_sent ON chat_log (datetime_sent);
 
-DROP TABLE IF EXISTS banned_ips;
+DROP TABLE IF EXISTS chat_log_pm CASCADE;
+CREATE TABLE chat_log_pm (
+    id             SERIAL       PRIMARY KEY,
+    user_id        INTEGER      NOT NULL,
+    message        TEXT         NOT NULL,
+    recipient_id   INTEGER      NOT NULL,
+    datetime_sent  TIMESTAMPTZ  NOT NULL  DEFAULT NOW(),
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+);
+CREATE INDEX chat_log_pm_index_user_id       ON chat_log_pm (user_id);
+CREATE INDEX chat_log_pm_index_recipient_id  ON chat_log_pm (recipient_id);
+CREATE INDEX chat_log_pm_index_datetime_sent ON chat_log_pm (datetime_sent);
+
+DROP TABLE IF EXISTS banned_ips CASCADE;
 CREATE TABLE banned_ips (
-    id                 INT            NOT NULL  PRIMARY KEY  AUTO_INCREMENT,
-    /* PRIMARY KEY automatically creates a UNIQUE constraint */
-    ip                 VARCHAR(40)    NOT NULL,
-    user_id            INT            NULL      DEFAULT NULL,
-    /* If specified, this IP address is associated with the respective user */
-    admin_responsible  INT            NOT NULL,
-    reason             NVARCHAR(150)  NULL      DEFAULT NULL,
-    datetime_banned    TIMESTAMP      NOT NULL  DEFAULT NOW(),
-
-    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
-    /* If the user is deleted, automatically delete all of the rows */
-    FOREIGN KEY(admin_responsible) REFERENCES users(id)
+    id               SERIAL       PRIMARY KEY,
+    ip               TEXT         NOT NULL,
+    /* An entry for a banned IP can optionally be associated with a user */
+    user_id          INTEGER      NULL      DEFAULT NULL,
+    reason           TEXT         NULL      DEFAULT NULL,
+    datetime_banned  TIMESTAMPTZ  NOT NULL  DEFAULT NOW(),
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
-DROP TABLE IF EXISTS discord_metadata;
-CREATE TABLE discord_metadata (
-    id     INT            NOT NULL  PRIMARY KEY  AUTO_INCREMENT,
-    name   VARCHAR(20)    NOT NULL  UNIQUE,
-    value  NVARCHAR(100)  NOT NULL
+DROP TABLE IF EXISTS muted_ips CASCADE;
+CREATE TABLE muted_ips (
+    id               SERIAL       PRIMARY KEY,
+    ip               TEXT         NOT NULL,
+    /* An entry for a muted IP can optionally be associated with a user */
+    user_id          INTEGER      NULL      DEFAULT NULL,
+    reason           TEXT         NULL      DEFAULT NULL,
+    datetime_banned  TIMESTAMPTZ  NOT NULL  DEFAULT NOW(),
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
-CREATE INDEX discord_metadata_index_name ON discord_metadata (name);
-INSERT INTO discord_metadata (name, value) VALUES ('last_at_here', '2006-01-02T15:04:05Z07:00');
-/* The "last_at_here" value is stored as a RFC3339 string */
 
-DROP TABLE IF EXISTS discord_waiters;
+DROP TABLE IF EXISTS throttled_ips CASCADE;
+CREATE TABLE throttled_ips (
+    id                  SERIAL       PRIMARY KEY,
+    ip                  TEXT         NOT NULL,
+    /* An entry for a throttled IP can optionally be associated with a user */
+    user_id             INTEGER      NULL      DEFAULT NULL,
+    reason              TEXT         NULL      DEFAULT NULL,
+    datetime_throttled  TIMESTAMPTZ  NOT NULL  DEFAULT NOW(),
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+DROP TABLE IF EXISTS metadata CASCADE;
+CREATE TABLE metadata (
+    id     SERIAL  PRIMARY KEY,
+    name   TEXT    NOT NULL  UNIQUE,
+    value  TEXT    NOT NULL
+);
+/* The "discord_last_at_here" value is stored as a RFC3339 string */
+INSERT INTO metadata (name, value) VALUES ('discord_last_at_here', '2006-01-02T15:04:05Z');
+
+DROP TABLE IF EXISTS discord_waiters CASCADE;
 CREATE TABLE discord_waiters (
-    id                INT           NOT NULL  PRIMARY KEY  AUTO_INCREMENT,
-    username          NVARCHAR(30)  NOT NULL,
-    discord_mention   VARCHAR(30)   NOT NULL,
-    datetime_expired  TIMESTAMP     NOT NULL
+    id                SERIAL       PRIMARY KEY,
+    username          TEXT         NOT NULL,
+    discord_mention   TEXT         NOT NULL,
+    datetime_expired  TIMESTAMPTZ  NOT NULL
 );

@@ -1,0 +1,69 @@
+{{define "profile"}}
+
+<h3 class="align-center">
+{{ $length := len .History }}
+{{if eq $length 0}}
+  No games played.
+{{else}}
+  Total games: {{$length}}
+{{end}}
+</h3>
+
+{{if gt $length 0}}
+<br />
+
+<ul id="filter-players" class="horizontal">
+  <li>
+    <div class="create-game-icon">
+        <i class="fas fa-users" style="position: relative; top: 1px;"></i>
+    </div>
+    Filter by # of Players
+  </li>
+  <li>
+    <select id="filter-by-players">
+      <option value="all">All</option>
+      <option value="2">2-Players</option>
+      <option value="3">3-Players</option>
+      <option value="4">4-Players</option>
+      <option value="5">5-Players</option>
+      <option value="6">6-Players</option>
+    </select>
+  </li>
+</ul>
+
+<br /><br /><br />
+
+<table>
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th># of Players</th>
+      <th>Score</th>
+      <th>Variant</th>
+      <th>Date</th>
+      <th>Players</th>
+      {{if not .SpecificSeed}}<th>Other Scores</th>{{end}}
+    </tr>
+  </thead>
+  <tbody>
+    {{range $index, $results := .History}}
+      <tr class="history-row-{{.NumPlayers}}">
+        <td><a href="/replay/{{.ID}}">{{.ID}}</a></td>
+        <td>{{.NumPlayers}}</td>
+        <td>{{.Score}}</td>
+        <td>{{.Options.Variant}}</td>
+        <td>{{.DatetimeFinished}}</td>
+        <td>
+          <!-- From: https://stackoverflow.com/questions/21305865/golang-separating-items-with-comma-in-template -->
+          <a href="/history/{{range $index2, $results2 := .PlayerNames}}{{if $index2}}/{{end}}{{$results2}}{{end}}">
+            {{range $index2, $results2 := .PlayerNames}}{{if $index2}}, {{end}}{{$results2}}{{end}}
+          </a>
+        </td>
+        {{if not $.SpecificSeed}}<td><a href="/seed/{{.Seed}}">{{.NumGamesOnThisSeed}}</a></td>{{end}}
+      </tr>
+    {{- end -}}
+  </tbody>
+</tabke>
+{{end}}
+
+{{end}}
