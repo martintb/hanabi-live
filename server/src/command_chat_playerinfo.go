@@ -2,7 +2,6 @@ package main
 
 import (
 	"strconv"
-	"time"
 )
 
 // commandChatPlayerInfo is sent when a user types the "/playerinfo" command
@@ -12,7 +11,6 @@ import (
 //   name: 'Alice',
 // }
 func commandChatPlayerInfo(s *Session, d *CommandData) {
-	// Normalize the username
 	normalizedUsername := normalizeString(d.Name)
 
 	// Validate that this person exists in the database
@@ -42,13 +40,8 @@ func commandChatPlayerInfo(s *Session, d *CommandData) {
 	}
 
 	msg := "\"" + d.Name + "\" has played " + strconv.Itoa(numGames) + " non-speedrun games. " +
-		"<a href=\"/scores/" + d.Name + "\" target=\"_blank\" rel=\"noopener noreferrer\">More stats here</a>."
-
-	s.Emit("chat", &ChatMessage{
-		Msg:       msg,
-		Who:       "Hanabi Live",
-		Datetime:  time.Now(),
-		Room:      d.Room,
-		Recipient: s.Username(),
-	})
+		"More stats " +
+		"<a href=\"/scores/" + d.Name + "\" target=\"_blank\" rel=\"noopener noreferrer\">" +
+		"here</a>."
+	chatServerSendPM(s, msg, d.Room)
 }

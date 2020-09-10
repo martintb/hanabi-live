@@ -9,23 +9,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type StatsData struct {
-	Title string
-	Dev   bool
-
-	NumGames                   int
-	TimePlayed                 string
-	NumGamesSpeedrun           int
-	TimePlayedSpeedrun         string
-	NumVariants                int
-	NumMaxScoresPerType        []int
-	PercentageMaxScoresPerType []string
-	NumMaxScores               int
-	PercentageMaxScores        string
-
-	Variants []VariantStatsData
-}
-
 type VariantStatsData struct {
 	ID            int
 	Name          string
@@ -92,7 +75,7 @@ func httpStats(c *gin.Context) {
 
 	// Get the stats for all variants
 	var statsMap map[int]VariantStatsRow
-	if v, err := models.VariantStats.GetAll(variantsID); err != nil {
+	if v, err := models.VariantStats.GetAll(); err != nil {
 		logger.Error("Failed to get the stats for all the variants:", err)
 		http.Error(
 			w,
@@ -108,11 +91,11 @@ func httpStats(c *gin.Context) {
 	// filling in any non-played variants with 0 values
 	numMaxScores := 0
 	numMaxScoresPerType := make([]int, 5) // For 2-player, 3-player, etc.
-	variantStatsList := make([]VariantStatsData, 0)
-	for _, name := range variantsList {
+	variantStatsList := make([]*VariantStatsData, 0)
+	for _, name := range variantNames {
 		variant := variants[name]
 		maxScore := len(variant.Suits) * PointsPerSuit
-		variantStats := VariantStatsData{
+		variantStats := &VariantStatsData{
 			ID:   variant.ID,
 			Name: name,
 		}
@@ -162,26 +145,25 @@ func httpStats(c *gin.Context) {
 
 	percentageMaxScoresPerType := make([]string, 0)
 	for _, maxScores := range numMaxScoresPerType {
-		percentage := float64(maxScores) / float64(len(variantsList)) * 100
+		percentage := float64(maxScores) / float64(len(variantNames)) * 100
 		percentageString := fmt.Sprintf("%.1f", percentage)
 		percentageString = strings.TrimSuffix(percentageString, ".0")
 		percentageMaxScoresPerType = append(percentageMaxScoresPerType, percentageString)
 	}
 
-	percentageMaxScores := float64(numMaxScores) / float64(len(variantsList)*5) * 100
+	percentageMaxScores := float64(numMaxScores) / float64(len(variantNames)*5) * 100
 	// (we multiply by 5 because there are max scores for 2 to 6 players)
 	percentageMaxScoresString := fmt.Sprintf("%.1f", percentageMaxScores)
 	percentageMaxScoresString = strings.TrimSuffix(percentageMaxScoresString, ".0")
 
-	data := StatsData{
+	data := TemplateData{
 		Title: "Stats",
-		Dev:   false,
 
 		NumGames:                   globalStats.NumGames,
 		TimePlayed:                 timePlayed,
 		NumGamesSpeedrun:           globalStats.NumGamesSpeedrun,
 		TimePlayedSpeedrun:         timePlayedSpeedrun,
-		NumVariants:                len(variantsList),
+		NumVariants:                len(variantNames),
 		NumMaxScoresPerType:        numMaxScoresPerType,
 		PercentageMaxScoresPerType: percentageMaxScoresPerType,
 		NumMaxScores:               numMaxScores,

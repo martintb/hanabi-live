@@ -1,5 +1,5 @@
-// The Hanabi server also listens on a separate port that only accepts connections from the local
-// system; this allows administrative tasks to be performed without having to go through a browser
+// The server also listens on a separate port that only accepts connections from the local system;
+// this allows administrative tasks to be performed without having to go through a browser
 
 package main
 
@@ -8,7 +8,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -46,8 +45,8 @@ func httpLocalhostInit() {
 	httpRouter.GET("/saveTables", httpLocalhostSaveTables)
 	httpRouter.POST("/sendWarning", httpLocalhostUserAction)
 	httpRouter.POST("/sendError", httpLocalhostUserAction)
-	httpRouter.POST("/serialize", httpLocalhostSerialize)
 	httpRouter.GET("/shutdown", httpLocalhostShutdown)
+	httpRouter.GET("/terminate", httpLocalhostTerminate)
 	httpRouter.GET("/timeLeft", httpLocalhostTimeLeft)
 	httpRouter.GET("/uptime", httpLocalhostUptime)
 	httpRouter.GET("/version", httpLocalhostVersion)
@@ -58,8 +57,8 @@ func httpLocalhostInit() {
 	HTTPServerWithTimeout := &http.Server{
 		Addr:         "127.0.0.1:" + strconv.Itoa(port), // Listen only on the localhost interface
 		Handler:      httpRouter,
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		ReadTimeout:  HTTPReadTimeout,
+		WriteTimeout: HTTPWriteTimeout,
 	}
 	if err := HTTPServerWithTimeout.ListenAndServe(); err != nil {
 		logger.Fatal("ListenAndServe failed (for localhost):", err)
@@ -105,7 +104,7 @@ func httpLocalhostUserAction(c *gin.Context) {
 		lastIP = v
 	}
 
-	path := c.FullPath()
+	path := c.Request.URL.Path
 	if strings.HasPrefix(path, "/ban") {
 		httpLocalhostBan(c, username, lastIP, userID)
 	} else if strings.HasPrefix(path, "/mute") {
@@ -120,16 +119,21 @@ func httpLocalhostUserAction(c *gin.Context) {
 }
 
 func logoutUser(userID int) {
-	if s, ok := sessions[userID]; !ok {
+	sessionsMutex.RLock()
+	s, ok := sessions[userID]
+	sessionsMutex.RUnlock()
+
+	if !ok {
 		logger.Info("Attempted to manually log out user " + strconv.Itoa(userID) + ", " +
 			"but they were not online.")
+		return
+	}
+
+	if err := s.Close(); err != nil {
+		logger.Error("Failed to manually close the WebSocket session for user "+
+			strconv.Itoa(userID)+":", err)
 	} else {
-		if err := s.Close(); err != nil {
-			logger.Info("Failed to manually close the WebSocket session for user "+
-				strconv.Itoa(userID)+":", err)
-		} else {
-			logger.Info("Successfully terminated the WebSocket session for user " +
-				strconv.Itoa(userID) + ".")
-		}
+		logger.Info("Successfully terminated the WebSocket session for user " +
+			strconv.Itoa(userID) + ".")
 	}
 }

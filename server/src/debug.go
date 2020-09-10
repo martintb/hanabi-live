@@ -7,32 +7,37 @@ import (
 	"strings"
 )
 
+var (
+	badGameIDs = make([]int, 0)
+)
+
 func debugPrint() {
+	tablesMutex.RLock()
+	defer tablesMutex.RUnlock()
+
 	logger.Debug("---------------------------------------------------------------")
 	logger.Debug("Current total tables:", len(tables))
 
 	numUnstarted := 0
+	numRunning := 0
+	numReplays := 0
+
 	for _, t := range tables { // This is a map[int]*Table
 		if !t.Running {
 			numUnstarted++
 		}
-	}
-	logger.Debug("Current unstarted tables:", numUnstarted)
 
-	numRunning := 0
-	for _, t := range tables { // This is a map[int]*Table
 		if t.Running && !t.Replay {
 			numRunning++
 		}
-	}
-	logger.Debug("Current ongoing tables:", numRunning)
 
-	numReplays := 0
-	for _, t := range tables { // This is a map[int]*Table
 		if t.Replay {
 			numReplays++
 		}
 	}
+
+	logger.Debug("Current unstarted tables:", numUnstarted)
+	logger.Debug("Current ongoing tables:", numRunning)
 	logger.Debug("Current replays:", numReplays)
 
 	logger.Debug("---------------------------------------------------------------")
@@ -43,8 +48,9 @@ func debugPrint() {
 	if len(tables) == 0 {
 		logger.Debug("[no current tables]")
 	}
-	for id, t := range tables { // This is a map[int]*Table
-		logger.Debug(strconv.Itoa(id) + " - " + t.Name)
+
+	for tableID, t := range tables { // This is a map[int]*Table
+		logger.Debug(strconv.FormatUint(tableID, 10) + " - " + t.Name)
 		logger.Debug("\n")
 
 		// Print out all of the fields
@@ -185,38 +191,184 @@ func debugPrint() {
 	if len(sessions) == 0 {
 		logger.Debug("    [no users]")
 	}
+	sessionsMutex.RLock()
 	for i, s2 := range sessions { // This is a map[int]*Session
 		logger.Debug("    User ID: " + strconv.Itoa(i) + ", " +
 			"Username: " + s2.Username() + ", " +
 			"Status: " + strconv.Itoa(s2.Status()))
 	}
-	logger.Debug("---------------------------------------------------------------")
-
-	// Print out the waiting list
-	logger.Debug("Waiting list (" + strconv.Itoa(len(waitingList)) + "):")
-	if len(waitingList) == 0 {
-		logger.Debug("    [no people on the waiting list]")
-	}
-	for i, p := range waitingList { // This is a []*models.Waiter
-		logger.Debug("    " + strconv.Itoa(i) + " - " +
-			p.Username + " - " + p.DiscordMention + " - " + p.DatetimeExpired.String())
-	}
-	logger.Debug("    discordLastAtHere:", discordLastAtHere)
+	sessionsMutex.RUnlock()
 	logger.Debug("---------------------------------------------------------------")
 }
 
 func debugFunction() {
-	// Lock the command mutex for the duration of the function to ensure synchronous execution
-	commandMutex.Lock()
-	defer commandMutex.Unlock()
-
 	logger.Debug("Executing debug function(s).")
 
-	/*
-		updateAllUserStats()
-		updateAllVariantStats()
-	*/
+	// updateAllSeedNumGames()
+	// updateAllUserStats()
+	// updateAllVariantStats()
+	// updateUserStatsFromPast24Hours()
+	// getBadGameIDs()
 
+	updateUserStatsFromInterval("2 hours")
+
+	logger.Debug("Debug function(s) complete.")
+}
+
+/*
+func updateAllSeedNumGames() {
+	if err := models.Seeds.UpdateAll(); err != nil {
+		logger.Error("Failed to update the number of games for every seed:", err)
+		return
+	}
+	logger.Info("Updated the number of games for every seed.")
+}
+
+func updateAllUserStats() {
+	if err := models.UserStats.UpdateAll(variantGetHighestID()); err != nil {
+		logger.Error("Failed to update the stats for every user:", err)
+		return
+	}
+	logger.Info("Updated the stats for every user.")
+}
+
+func updateAllVariantStats() {
+	highestID := variantGetHighestID()
+	maxScores := make([]int, 0)
+	for i := 0; i <= highestID; i++ {
+		variantName := variantIDMap[i]
+		variant := variants[variantName]
+		maxScores = append(maxScores, variant.MaxScore)
+	}
+
+	if err := models.VariantStats.UpdateAll(highestID, maxScores); err != nil {
+		logger.Error("Failed to update the stats for every variant:", err)
+	} else {
+		logger.Info("Updated the stats for every variant.")
+	}
+}
+*/
+
+func updateUserStatsFromInterval(interval string) {
+	// Get the games played in the last X hours/days/whatever
+	// Interval must mast a valid Postgres interval
+	// https://popsql.com/learn-sql/postgresql/how-to-query-date-and-time-in-postgresql
+	var gameIDs []int
+	if v, err := models.Games.GetGameIDsSinceInterval(interval); err != nil {
+		logger.Error("Failed to get the game IDs for the last \""+interval+"\":", err)
+	} else {
+		gameIDs = v
+	}
+
+	updateStatsFromGameIDs(gameIDs)
+}
+
+func updateStatsFromGameIDs(gameIDs []int) {
+	// Get the games corresponding to these IDs
+	var gameHistoryList []*GameHistory
+	if v, err := models.Games.GetHistory(gameIDs); err != nil {
+		logger.Error("Failed to get the games from the database:", err)
+		return
+	} else {
+		gameHistoryList = v
+	}
+
+	for _, gameHistory := range gameHistoryList {
+		updateStatsFromGameHistory(gameHistory)
+	}
+}
+
+// updateStatsFromGameHistory is mostly copied from the "Game.WriteDatabaseStats()" function
+// (the difference is that it works on a "GameHistory" instead of a "Game")
+func updateStatsFromGameHistory(gameHistory *GameHistory) {
+	logger.Debug("Updating stats for game: " + strconv.Itoa(gameHistory.ID))
+
+	// Local variables
+	variant := variants[gameHistory.Options.VariantName]
+	// 2-player is at index 0, 3-player is at index 1, etc.
+	bestScoreIndex := gameHistory.Options.NumPlayers - 2
+
+	// Update the variant-specific stats for each player
+	modifier := gameHistory.Options.GetModifier()
+	for _, playerName := range gameHistory.PlayerNames {
+		// Check to see if this username exists in the database
+		var userID int
+		if exists, v, err := models.Users.Get(playerName); err != nil {
+			logger.Error("Failed to get user \""+playerName+"\":", err)
+			return
+		} else if !exists {
+			logger.Error("User \"" + playerName + "\" does not exist in the database.")
+			return
+		} else {
+			userID = v.ID
+		}
+
+		// Get their current best scores
+		var userStats *UserStatsRow
+		if v, err := models.UserStats.Get(userID, variant.ID); err != nil {
+			logger.Error("Failed to get the stats for user "+playerName+":", err)
+			return
+		} else {
+			userStats = v
+		}
+
+		thisScore := &BestScore{
+			Score:    gameHistory.Score,
+			Modifier: modifier,
+		}
+		bestScore := userStats.BestScores[bestScoreIndex]
+		if thisScore.IsBetterThan(bestScore) {
+			bestScore.Score = gameHistory.Score
+			bestScore.Modifier = modifier
+		}
+
+		// Update their stats
+		// (even if they did not get a new best score,
+		// we still want to update their average score and strikeout rate)
+		if err := models.UserStats.Update(userID, variant.ID, userStats); err != nil {
+			logger.Error("Failed to update the stats for user "+playerName+":", err)
+			return
+		}
+	}
+
+	// Get the current stats for this variant
+	var variantStats VariantStatsRow
+	if v, err := models.VariantStats.Get(variant.ID); err != nil {
+		logger.Error("Failed to get the stats for variant "+strconv.Itoa(variant.ID)+":", err)
+		return
+	} else {
+		variantStats = v
+	}
+
+	// If the game was played with no modifiers, update the stats for this variant
+	if modifier == 0 {
+		bestScore := variantStats.BestScores[bestScoreIndex]
+		if gameHistory.Score > bestScore.Score {
+			bestScore.Score = gameHistory.Score
+		}
+	}
+
+	// Write the updated stats to the database
+	// (even if the game was played with modifiers,
+	// we still need to update the number of games played)
+	if err := models.VariantStats.Update(variant.ID, variant.MaxScore, variantStats); err != nil {
+		logger.Error("Failed to update the stats for variant "+strconv.Itoa(variant.ID)+":", err)
+		return
+	}
+}
+
+/*
+func variantGetHighestID() int {
+	highestID := 0
+	for k := range variantIDMap {
+		if k > highestID {
+			highestID = k
+		}
+	}
+	return highestID
+}
+
+func getBadGameIDs() {
 	// Get all game IDs
 	var ids []int
 	if v, err := models.Games.GetAllIDs(); err != nil {
@@ -230,54 +382,19 @@ func debugFunction() {
 		if i > 1000 {
 			break
 		}
-		logger.Debug("XXXXX GAME:", id)
+		logger.Debug("ON GAME:", id)
 		s := newFakeSession(1, "Server")
-		commandReplayCreate(s, &CommandData{
+		commandReplayCreate(s, &CommandData{ // Manual invocation
 			Source:     "id",
 			GameID:     id,
 			Visibility: "solo",
 		})
-		commandTableUnattend(s, &CommandData{
-			TableID: newTableID,
+		commandTableUnattend(s, &CommandData{ // Manual invocation
+			TableID: tableIDCounter,
 		})
 	}
 
-	logger.Debug("FUCKED IDS:")
-	logger.Debug(fuckedIDs)
-
-	logger.Debug("Debug function(s) complete.")
-}
-
-/*
-func updateAllUserStats() {
-	if err := models.UserStats.UpdateAll(variantGetHighestID()); err != nil {
-		logger.Error("Failed to update the stats for every user:", err)
-	} else {
-		logger.Info("Updated the stats for every user.")
-	}
-}
-
-func updateAllVariantStats() {
-	highestID := variantGetHighestID()
-	maxScores := make([]int, 0)
-	for i := 0; i <= highestID; i++ {
-		maxScores = append(maxScores, variants[variantsID[i]].MaxScore)
-	}
-
-	if err := models.VariantStats.UpdateAll(highestID, maxScores); err != nil {
-		logger.Error("Failed to update the stats for every variant:", err)
-	} else {
-		logger.Info("Updated the stats for every variant.")
-	}
-}
-
-func variantGetHighestID() int {
-	highestID := 0
-	for k := range variantsID {
-		if k > highestID {
-			highestID = k
-		}
-	}
-	return highestID
+	logger.Debug("BAD GAME IDS:")
+	logger.Debug(badGameIDs)
 }
 */

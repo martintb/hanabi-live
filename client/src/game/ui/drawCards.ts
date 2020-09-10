@@ -1,29 +1,27 @@
-// The Hanabi card grahpics are various HTML5 canvas drawings
+// The card graphics are various HTML5 canvas drawings
 
-// Imports
-import {
-  CARD_H,
-  CARD_W,
-} from '../../constants';
-import { SUITS } from '../data/gameData';
+import { getSuit } from '../data/gameData';
+import { abbreviationRules } from '../rules';
 import * as variantRules from '../rules/variant';
 import Color from '../types/Color';
-import { STACK_BASE_RANK, UNKNOWN_CARD_RANK, START_CARD_RANK } from '../types/constants';
+import { STACK_BASE_RANK, START_CARD_RANK, UNKNOWN_CARD_RANK } from '../types/constants';
 import Suit from '../types/Suit';
 import Variant from '../types/Variant';
+import { CARD_H, CARD_W } from './constants';
 import drawPip from './drawPip';
 import drawStylizedRank from './drawStylizedRank';
 
 // This function returns an object containing all of the drawn cards images (on individual canvases)
-export default (variant: Variant, colorblindMode: boolean, styleNumbers: boolean) => {
+export default function drawCards(
+  variant: Variant,
+  colorblindMode: boolean,
+  styleNumbers: boolean,
+) {
   const cardImages: Map<string, HTMLCanvasElement> = new Map<string, HTMLCanvasElement>();
 
   // Add the "Unknown" suit to the list of suits for this variant
   // The unknown suit has blank white cards, representing cards of known rank but unknown suit
-  const unknownSuit = SUITS.get('Unknown');
-  if (typeof unknownSuit === 'undefined') {
-    throw new Error('Failed to get the "Unknown" variant in the "drawCards()" function.');
-  }
+  const unknownSuit = getSuit('Unknown');
   const suits = variant.suits.concat(unknownSuit);
 
   for (const suit of suits) {
@@ -43,9 +41,9 @@ export default (variant: Variant, colorblindMode: boolean, styleNumbers: boolean
         throw new Error('Failed to get the context for a new canvas element.');
       }
 
-      // We don't need the cross texture pattern on the stack base
+      // We don't need the background on the stack base
       if (rank !== STACK_BASE_RANK) {
-        drawCardTexture(ctx);
+        drawCardBackground(ctx);
       }
 
       // Make the special corners on the cards for dual-color suits
@@ -54,10 +52,10 @@ export default (variant: Variant, colorblindMode: boolean, styleNumbers: boolean
       }
 
       // Draw the background and the borders around the card
-      drawCardBase(ctx, suit, rank, colorblindMode);
+      drawCardBase(ctx, suit, rank, variant, colorblindMode);
 
       ctx.shadowBlur = 10;
-      ctx.fillStyle = getSuitStyle(suit, ctx, 'number', colorblindMode);
+      ctx.fillStyle = getSuitStyle(suit, rank, ctx, 'number', variant, colorblindMode);
       ctx.strokeStyle = 'black';
       ctx.lineWidth = 2;
       ctx.lineJoin = 'round';
@@ -70,7 +68,7 @@ export default (variant: Variant, colorblindMode: boolean, styleNumbers: boolean
         }
         let fontSize;
         if (colorblindMode) {
-          rankLabel += suit.abbreviation;
+          rankLabel += abbreviationRules.get(suit.name, variant);
           fontSize = 68;
           textYPos = 83;
         } else {
@@ -139,7 +137,7 @@ export default (variant: Variant, colorblindMode: boolean, styleNumbers: boolean
   cardImages.set('deck-back', makeDeckBack(variant));
 
   return cardImages;
-};
+}
 
 const initCanvas = () => {
   const cvs = document.createElement('canvas');
@@ -271,7 +269,7 @@ const makeUnknownCard = () => {
     throw new Error('Failed to get the context for a new canvas element.');
   }
 
-  drawCardTexture(ctx);
+  drawCardBackground(ctx);
   ctx.fillStyle = 'black';
   cardBorderPath(ctx, 4);
 
@@ -323,11 +321,12 @@ const drawCardBase = (
   ctx: CanvasRenderingContext2D,
   suit: Suit,
   rank: number,
+  variant: Variant,
   colorblindMode: boolean,
 ) => {
   // Draw the background
-  ctx.fillStyle = getSuitStyle(suit, ctx, 'background', colorblindMode);
-  ctx.strokeStyle = getSuitStyle(suit, ctx, 'background', colorblindMode);
+  ctx.fillStyle = getSuitStyle(suit, rank, ctx, 'background', variant, colorblindMode);
+  ctx.strokeStyle = getSuitStyle(suit, rank, ctx, 'background', variant, colorblindMode);
   cardBorderPath(ctx, 4);
 
   // Draw the borders (on visible cards) and the color fill
@@ -345,19 +344,19 @@ const drawCardBase = (
 };
 
 const cardBorderPath = (ctx: CanvasRenderingContext2D, padding: number) => {
-  const xrad = CARD_W * 0.08;
-  const yrad = CARD_W * 0.08;
+  const xRadians = CARD_W * 0.08;
+  const yRadians = CARD_W * 0.08;
   // (we want them to both have the same value so that the curve has a 45 degree angle)
   ctx.beginPath();
-  ctx.moveTo(padding, yrad + padding); // Top-left corner
-  ctx.lineTo(padding, CARD_H - yrad - padding); // Bottom-left corner
-  ctx.quadraticCurveTo(0, CARD_H, xrad + padding, CARD_H - padding);
-  ctx.lineTo(CARD_W - xrad - padding, CARD_H - padding); // Bottom-right corner
-  ctx.quadraticCurveTo(CARD_W, CARD_H, CARD_W - padding, CARD_H - yrad - padding);
-  ctx.lineTo(CARD_W - padding, yrad + padding); // Top-right corner
-  ctx.quadraticCurveTo(CARD_W, 0, CARD_W - xrad - padding, padding);
-  ctx.lineTo(xrad + padding, padding); // Top-left corner
-  ctx.quadraticCurveTo(0, 0, padding, yrad + padding);
+  ctx.moveTo(padding, yRadians + padding); // Top-left corner
+  ctx.lineTo(padding, CARD_H - yRadians - padding); // Bottom-left corner
+  ctx.quadraticCurveTo(0, CARD_H, xRadians + padding, CARD_H - padding);
+  ctx.lineTo(CARD_W - xRadians - padding, CARD_H - padding); // Bottom-right corner
+  ctx.quadraticCurveTo(CARD_W, CARD_H, CARD_W - padding, CARD_H - yRadians - padding);
+  ctx.lineTo(CARD_W - padding, yRadians + padding); // Top-right corner
+  ctx.quadraticCurveTo(CARD_W, 0, CARD_W - xRadians - padding, padding);
+  ctx.lineTo(xRadians + padding, padding); // Top-left corner
+  ctx.quadraticCurveTo(0, 0, padding, yRadians + padding);
 };
 
 const drawShape = (ctx: CanvasRenderingContext2D) => {
@@ -425,42 +424,49 @@ const drawMixedCardHelper = (ctx: CanvasRenderingContext2D, clueColors: Color[])
   ctx.restore();
 };
 
-// Draw texture lines on card
-const drawCardTexture = (ctx: CanvasRenderingContext2D) => {
+const drawCardBackground = (ctx: CanvasRenderingContext2D) => {
   cardBorderPath(ctx, 4);
 
   ctx.fillStyle = 'white';
   ctx.fill();
-
-  ctx.save();
-  ctx.clip();
-  ctx.globalAlpha = 0.2;
-  ctx.strokeStyle = 'black';
-
-  for (let x = 0; x < CARD_W; x += 4 + (Math.random() * 4)) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, CARD_H);
-    ctx.stroke();
-  }
-
-  for (let y = 0; y < CARD_H; y += 4 + (Math.random() * 4)) {
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(CARD_W, y);
-    ctx.stroke();
-  }
 
   ctx.restore();
 };
 
 const getSuitStyle = (
   suit: Suit,
+  rank: number,
   ctx: CanvasRenderingContext2D,
   cardArea: string,
+  variant: Variant,
   colorblindMode: boolean,
 ) => {
-  // Nearly all suits have a solid fill
+  if (suit.prism) {
+    // Prism cards have a custom color depending on their rank
+    if (rank === 0) {
+      return suit.fill;
+    }
+
+    let prismColorIndex = (rank - 1) % variant.clueColors.length;
+    if (rank === START_CARD_RANK) {
+      // "START" cards count as rank 0, so they are touched by the final color
+      prismColorIndex = variant.clueColors.length - 1;
+    }
+    const fillToMixHex = variant.clueColors[prismColorIndex].fill;
+    const fillToMixRGB = hexToRgb(fillToMixHex);
+    if (fillToMixRGB === null) {
+      return suit.fill;
+    }
+    const fillToMixArray = [fillToMixRGB.r, fillToMixRGB.g, fillToMixRGB.b];
+    let fillToMixArray2 = [255, 255, 255]; // White
+    if (suit.oneOfEach) {
+      fillToMixArray2 = [0, 0, 0]; // Black
+    }
+
+    return colorMixer(fillToMixArray, fillToMixArray2, 0.5); // Mix it with white by 50%
+  }
+
+  // Nearly all other suits have a solid fill
   if (suit.fill !== 'multi') {
     return colorblindMode ? suit.fillColorblind : suit.fill;
   }
@@ -491,3 +497,32 @@ const evenLinearGradient = (
   }
   return grad;
 };
+
+// From: https://stackoverflow.com/questions/14819058/mixing-two-colors-naturally-in-javascript
+// colorChannelA and colorChannelB are integers ranging from 0 to 255
+// amountToMix ranges from 0.0 to 1.0
+function colorChannelMixer(colorChannelA: number, colorChannelB: number, amountToMix: number) {
+  const channelA = colorChannelA * amountToMix;
+  const channelB = colorChannelB * (1 - amountToMix);
+  return channelA + channelB;
+}
+
+// From: https://stackoverflow.com/questions/14819058/mixing-two-colors-naturally-in-javascript
+// rgbA and rgbB are arrays, amountToMix ranges from 0.0 to 1.0
+// example (red): rgbA = [255,0,0]
+function colorMixer(rgbA: number[], rgbB: number[], amountToMix: number) {
+  const r = colorChannelMixer(rgbA[0], rgbB[0], amountToMix);
+  const g = colorChannelMixer(rgbA[1], rgbB[1], amountToMix);
+  const b = colorChannelMixer(rgbA[2], rgbB[2], amountToMix);
+  return `rgb(${r},${g},${b})`;
+}
+
+// From: https://stackoverflow.com/questions/5623838/rgb-to-hex-and-hex-to-rgb
+function hexToRgb(hex: string) {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return result ? {
+    r: parseInt(result[1], 16),
+    g: parseInt(result[2], 16),
+    b: parseInt(result[3], 16),
+  } : null;
+}

@@ -1,9 +1,8 @@
 package main // In Go, executable commands must always use package main
 
-// This file contains the entry point for the Hanabi server software
+// This file contains the entry point for the server software
 
 import (
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path"
@@ -16,19 +15,18 @@ import (
 )
 
 var (
-	projectPath string
-	dataPath    string
-	versionPath string
-	tablesPath  string
+	projectPath       string
+	dataPath          string
+	versionPath       string
+	tablesPath        string
+	specificDealsPath string
 
 	logger           *Logger
 	gitCommitOnStart string
+	isDev            bool
 	usingSentry      bool
 	models           *Models
 	datetimeStarted  time.Time
-	tables           = make(map[int]*Table) // Defined in "table.go"
-	// For storing all of the random words (used for random table names)
-	wordList = make([]string, 0)
 )
 
 func main() {
@@ -36,9 +34,11 @@ func main() {
 	logger = NewLogger()
 
 	// Welcome message
-	logger.Info("+-----------------------+")
-	logger.Info("| Starting hanabi-live. |")
-	logger.Info("+-----------------------+")
+	startText := "| Starting " + WebsiteName + " |"
+	borderText := "+" + strings.Repeat("-", len(startText)-2) + "+"
+	logger.Info(borderText)
+	logger.Info(startText)
+	logger.Info(borderText)
 
 	// Get the project path
 	// https://stackoverflow.com/questions/18537257/
@@ -72,14 +72,27 @@ func main() {
 		return
 	}
 
-	// Check to see if the "ongoing-tables" directory exists
-	tablesPath = path.Join(dataPath, "ongoing-tables")
+	// Check to see if the "ongoing_tables" directory exists
+	tablesPath = path.Join(dataPath, "ongoing_tables")
 	if _, err := os.Stat(tablesPath); os.IsNotExist(err) {
-		logger.Error("The directory \"" + tablesPath + "\" does not exist. " +
-			"This directory should always exist; please try re-cloning the repository.")
-		return
+		if err2 := os.MkdirAll(tablesPath, 0755); err2 != nil {
+			logger.Fatal("Failed to create the \""+tablesPath+"\" directory:", err2)
+			return
+		}
 	} else if err != nil {
 		logger.Fatal("Failed to check if the \""+tablesPath+"\" file exists:", err)
+		return
+	}
+
+	// Check to see if the "specific_deals" directory exists
+	specificDealsPath = path.Join(dataPath, "specific_deals")
+	if _, err := os.Stat(tablesPath); os.IsNotExist(err) {
+		if err2 := os.MkdirAll(tablesPath, 0755); err2 != nil {
+			logger.Fatal("Failed to create the \""+specificDealsPath+"\" directory:", err2)
+			return
+		}
+	} else if err != nil {
+		logger.Fatal("Failed to check if the \""+specificDealsPath+"\" file exists:", err)
 		return
 	}
 
@@ -112,9 +125,12 @@ func main() {
 		return
 	}
 
-	// If we are running in a development environment, change some constants
-	if os.Getenv("DOMAIN") == "localhost" || os.Getenv("DOMAIN") == "" {
-		idleGameTimeout = idleGameTimeoutDev
+	if os.Getenv("DOMAIN") == "" ||
+		os.Getenv("DOMAIN") == "localhost" ||
+		strings.HasPrefix(os.Getenv("DOMAIN"), "192.168.") ||
+		strings.HasPrefix(os.Getenv("DOMAIN"), "10.") {
+
+		isDev = true
 	}
 
 	// Initialize Sentry (in "sentry.go")
@@ -158,23 +174,13 @@ func main() {
 	replayActionsFunctionsInit()
 
 	// Initialize "Detrimental Character Assignments" (in "characters.go")
-	characterInit()
+	charactersInit()
 
-	// Initialize the word list
-	wordListPath := path.Join(dataPath, "word_list.txt")
-	if v, err := ioutil.ReadFile(wordListPath); err != nil {
-		logger.Fatal("Failed to read the \""+wordListPath+"\" file:", err)
-		return
-	} else {
-		wordListString := string(v)
-		wordList = strings.Split(wordListString, "\n")
-	}
+	// Initialize the list that contains every word in the dictionary
+	wordListInit()
 
 	// Start the Discord bot (in "discord.go")
 	discordInit()
-
-	// Get the people on the waiting list from the database (in "waitingList.go")
-	waitingListInit()
 
 	// Initialize a WebSocket router using the Melody framework (in "websocket.go")
 	websocketInit()

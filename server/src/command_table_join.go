@@ -15,23 +15,17 @@ import (
 //   tableID: 15103,
 // }
 func commandTableJoin(s *Session, d *CommandData) {
-	/*
-		Validate
-	*/
-
-	// Validate that the table exists
-	tableID := d.TableID
-	var t *Table
-	if v, ok := tables[tableID]; !ok {
-		s.Warning("Table " + strconv.Itoa(tableID) + " does not exist.")
+	t, exists := getTableAndLock(s, d.TableID, !d.NoLock)
+	if !exists {
 		return
-	} else {
-		t = v
+	}
+	if !d.NoLock {
+		defer t.Mutex.Unlock()
 	}
 
 	// Validate that the player is not already joined to this table
-	i := t.GetPlayerIndexFromID(s.UserID())
-	if i != -1 {
+	playerIndex := t.GetPlayerIndexFromID(s.UserID())
+	if playerIndex != -1 {
 		s.Warning("You have already joined this table.")
 		return
 	}
@@ -47,7 +41,7 @@ func commandTableJoin(s *Session, d *CommandData) {
 
 	// Validate that this table does not already have 6 players
 	if len(t.Players) >= 6 {
-		s.Warning("That table already has 6 players.")
+		s.Warning("That table is already full. (You can not play with more than 6 players.)")
 		return
 	}
 
@@ -81,9 +75,12 @@ func commandTableJoin(s *Session, d *CommandData) {
 		return
 	}
 
-	/*
-		Join
-	*/
+	tableJoin(s, t)
+}
+
+func tableJoin(s *Session, t *Table) {
+	// Local variables
+	variant := variants[t.Options.VariantName]
 
 	logger.Info(t.GetName() + "User \"" + s.Username() + "\" joined. " +
 		"(There are now " + strconv.Itoa(len(t.Players)+1) + " players.)")
@@ -100,10 +97,10 @@ func commandTableJoin(s *Session, d *CommandData) {
 	}
 
 	// Get the variant-specific stats for this player
-	var variantStats UserStatsRow
-	if v, err := models.UserStats.Get(s.UserID(), variants[t.Options.Variant].ID); err != nil {
-		logger.Error("Failed to get the stats for player \""+s.Username()+"\" "+
-			"for variant "+strconv.Itoa(variants[t.Options.Variant].ID)+":", err)
+	var variantStats *UserStatsRow
+	if v, err := models.UserStats.Get(s.UserID(), variant.ID); err != nil {
+		logger.Error("Failed to get the stats for player \""+s.Username()+"\" for variant "+
+			strconv.Itoa(variant.ID)+":", err)
 		s.Error("Something went wrong when getting your stats. Please contact an administrator.")
 		return
 	} else {
@@ -127,17 +124,12 @@ func commandTableJoin(s *Session, d *CommandData) {
 	// Set their status
 	if s != nil {
 		s.Set("status", StatusPregame)
+		s.Set("tableID", t.ID)
 		notifyAllUser(s)
 	}
 
-	// Send them a "joined" message
-	// (to let them know they successfully joined the table)
-	type JoinedMessage struct {
-		TableID int `json:"tableID"`
-	}
-	s.Emit("joined", &JoinedMessage{
-		TableID: tableID,
-	})
+	// Let the client know they successfully joined the table
+	s.NotifyTableJoined(t)
 
 	// Send them the chat history for this game
 	chatSendPastFromTable(s, t)
@@ -146,15 +138,14 @@ func commandTableJoin(s *Session, d *CommandData) {
 	// Send them messages for people typing, if any
 	for _, p := range t.Players {
 		if p.Typing {
-			s.NotifyChatTyping(p.Name, p.Typing)
+			s.NotifyChatTyping(t, p.Name, p.Typing)
 		}
 	}
 
 	// If there is an automatic start countdown, cancel it
 	if !t.DatetimePlannedStart.IsZero() {
 		t.DatetimePlannedStart = time.Time{} // Assign a zero value
-		room := "table" + strconv.Itoa(t.ID)
-		chatServerSend("Automatic game start has been canceled.", room)
+		chatServerSend("Automatic game start has been canceled.", t.GetRoomName())
 	}
 
 	// If the user previously requested it, automatically start the game
@@ -163,14 +154,14 @@ func commandTableJoin(s *Session, d *CommandData) {
 		for _, p2 := range t.Players {
 			if p2.ID == t.Owner {
 				if !p2.Present {
-					room := "table" + strconv.Itoa(t.ID)
-					chatServerSend("Aborting automatic game start since the table creator is away.",
-						room)
+					msg := "Aborting automatic game start since the table creator is away."
+					chatServerSend(msg, t.GetRoomName())
 					return
 				}
 
-				commandTableStart(p2.Session, &CommandData{
+				commandTableStart(p2.Session, &CommandData{ // Manual invocation
 					TableID: t.ID,
+					NoLock:  true,
 				})
 				return
 			}
@@ -180,20 +171,17 @@ func commandTableJoin(s *Session, d *CommandData) {
 		return
 	}
 
-	// Play a notification sound if it has been more than 15 seconds since the last person joined
-	if time.Since(t.DatetimeLastJoined) <= time.Second*15 {
-		return
-	}
+	// Update the "DatetimeLastJoined" field, but make a copy first
+	datetimeLastJoined := t.DatetimeLastJoined
 	t.DatetimeLastJoined = time.Now()
-	for _, p2 := range t.Players {
-		// Skip sending a message to the player that just joined
-		if p2.ID != p.ID {
-			type SoundLobbyMessage struct {
-				File string `json:"file"`
+
+	// Play a notification sound if it has been more than 15 seconds since the last person joined
+	if time.Since(datetimeLastJoined) > time.Second*15 {
+		for _, p2 := range t.Players {
+			// Skip sending a message to the player that just joined
+			if p2.ID != p.ID {
+				p2.Session.NotifySoundLobby("someone_joined")
 			}
-			p2.Session.Emit("soundLobby", SoundLobbyMessage{
-				File: "someone_joined",
-			})
 		}
 	}
 }

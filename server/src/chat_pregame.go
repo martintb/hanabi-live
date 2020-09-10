@@ -1,7 +1,9 @@
 package main
 
 import (
+	"math"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -9,71 +11,71 @@ import (
 	Pregame chat commands
 */
 
-// /s
+// /s - Automatically start the game as soon as someone joins
 func chatS(s *Session, d *CommandData, t *Table) {
 	automaticStart(s, d, t, len(t.Players)+1)
 }
 
-// /s2
+// /s2 - Automatically start the game as soon as there are 2 players
 func chatS2(s *Session, d *CommandData, t *Table) {
 	automaticStart(s, d, t, 2)
 }
 
-// /s3
+// /s3 - Automatically start the game as soon as there are 3 players
 func chatS3(s *Session, d *CommandData, t *Table) {
 	automaticStart(s, d, t, 3)
 }
 
-// /s4
+// /s4 - Automatically start the game as soon as there are 4 players
 func chatS4(s *Session, d *CommandData, t *Table) {
 	automaticStart(s, d, t, 4)
 }
 
-// /s5
+// /s5 - Automatically start the game as soon as there are 5 players
 func chatS5(s *Session, d *CommandData, t *Table) {
 	automaticStart(s, d, t, 5)
 }
 
-// /s6
+// /s6 - Automatically start the game as soon as there are 6 players
 func chatS6(s *Session, d *CommandData, t *Table) {
 	automaticStart(s, d, t, 6)
 }
 
 // /startin [minutes]
 func chatStartIn(s *Session, d *CommandData, t *Table) {
-	if d.Room == "lobby" {
-		chatServerSend(ChatCommandNotInGameFail, d.Room)
+	if t == nil || d.Room == "lobby" {
+		chatServerSend(NotInGameFail, d.Room)
 		return
 	}
 
 	if t.Running {
-		chatServerSend(ChatCommandNotStartedFail, d.Room)
+		chatServerSend(NotStartedFail, d.Room)
 		return
 	}
 
 	if s.UserID() != t.Owner {
-		chatServerSend(ChatCommandNotOwnerFail, d.Room)
+		chatServerSend(NotOwnerFail, d.Room)
 		return
 	}
 
 	// If the user did not specify the amount of minutes, assume 1
 	if len(d.Args) != 1 {
-		d.Args = []string{"1"}
-	}
-
-	var minutesToWait int
-	if v, err := strconv.Atoi(d.Args[0]); err != nil {
 		chatServerSend(
 			"You must specify the amount of minutes to wait. (e.g. \"/startin 1\")",
 			d.Room,
 		)
+	}
+
+	var minutesToWait float64
+	if v, err := strconv.ParseFloat(d.Args[0], 64); err != nil {
+		chatServerSend("\""+d.Args[0]+"\" is not a valid number.", d.Room)
 		return
 	} else {
 		minutesToWait = v
 	}
 
-	if minutesToWait < 1 {
-		chatServerSend("The minutes to wait must be equal to or greater than 1.", d.Room)
+	if minutesToWait <= 0 {
+		chatServerSend("The minutes to wait must be greater than 0.", d.Room)
 		return
 	}
 
@@ -82,12 +84,17 @@ func chatStartIn(s *Session, d *CommandData, t *Table) {
 		return
 	}
 
-	timeToWait := time.Duration(minutesToWait) * time.Minute
+	secondsToWait := int(math.Ceil(minutesToWait * 60))
+	timeToWait := time.Duration(secondsToWait) * time.Second
 	timeToStart := time.Now().Add(timeToWait)
 	t.DatetimePlannedStart = timeToStart
-	announcement := "The game will automatically start in " + strconv.Itoa(minutesToWait) + " minute"
-	if minutesToWait != 1 {
-		announcement += "s"
+	announcement := "The game will automatically start in "
+	if secondsToWait < 60 {
+		announcement += strconv.Itoa(secondsToWait) + " seconds"
+	} else if secondsToWait == 60 {
+		announcement += "1 minute"
+	} else {
+		announcement += d.Args[0] + " minutes"
 	}
 	announcement += "."
 	chatServerSend(announcement, d.Room)
@@ -95,18 +102,18 @@ func chatStartIn(s *Session, d *CommandData, t *Table) {
 }
 
 func chatKick(s *Session, d *CommandData, t *Table) {
-	if d.Room == "lobby" {
-		chatServerSend(ChatCommandNotInGameFail, d.Room)
+	if t == nil || d.Room == "lobby" {
+		chatServerSend(NotInGameFail, d.Room)
 		return
 	}
 
 	if t.Running {
-		chatServerSend(ChatCommandNotStartedFail, d.Room)
+		chatServerSend(NotStartedFail, d.Room)
 		return
 	}
 
 	if s.UserID() != t.Owner {
-		chatServerSend(ChatCommandNotOwnerFail, d.Room)
+		chatServerSend(NotOwnerFail, d.Room)
 		return
 	}
 
@@ -137,8 +144,9 @@ func chatKick(s *Session, d *CommandData, t *Table) {
 				s2 = newFakeSession(p.ID, p.Name)
 				logger.Info("Created a new fake session in the \"chatKick()\" function.")
 			}
-			commandTableLeave(s2, &CommandData{
+			commandTableLeave(s2, &CommandData{ // Manual invocation
 				TableID: t.ID,
+				NoLock:  true,
 			})
 
 			chatServerSend("Successfully kicked \""+d.Args[0]+"\" from the game.", d.Room)
@@ -153,11 +161,45 @@ func chatKick(s *Session, d *CommandData, t *Table) {
 	Pregame or game chat commands
 */
 
+// /missingscores
+func chatMissingScores(s *Session, d *CommandData, t *Table) {
+	if t == nil || d.Room == "lobby" {
+		chatServerSend(NotInGameFail, d.Room)
+		return
+	}
+
+	// If this is a pregame or ongoing game, make a list of the players
+	// If this is a shared replay, make a list of the spectators
+	usernames := make([]string, 0)
+	if t.Replay {
+		for _, sp := range t.Spectators {
+			usernames = append(usernames, sp.Name)
+		}
+	} else {
+		for _, p := range t.Players {
+			usernames = append(usernames, p.Name)
+		}
+	}
+
+	if len(usernames) < 2 || len(usernames) > 6 {
+		msg := "You can only perform this command if the game or shared replay has between 2 and 6 players."
+		chatServerSend(msg, d.Room)
+		return
+	}
+
+	msg := "http"
+	if useTLS {
+		msg += "s"
+	}
+	msg += "://" + domain + "/shared-missing-scores/" + strings.Join(usernames, "/")
+	chatServerSend(msg, d.Room)
+}
+
 // /findvariant
 // This function does not consider modifiers (e.g. "Empty Clues")
 func chatFindVariant(s *Session, d *CommandData, t *Table) {
-	if d.Room == "lobby" {
-		chatServerSend(ChatCommandNotInGameFail, d.Room)
+	if t == nil || d.Room == "lobby" {
+		chatServerSend(NotInGameFail, d.Room)
 		return
 	}
 
@@ -181,15 +223,15 @@ func chatFindVariant(s *Session, d *CommandData, t *Table) {
 	}
 
 	// Get all of the variant-specific stats for these players
-	statsMaps := make([]map[int]UserStatsRow, 0)
+	statsMaps := make([]map[int]*UserStatsRow, 0)
 	for _, userID := range userIDs {
-		if v, err := models.UserStats.GetAll(userID); err != nil {
+		if statsMap, err := models.UserStats.GetAll(userID); err != nil {
 			logger.Error("Failed to get all of the variant-specific stats for player ID "+
 				strconv.Itoa(userID)+":", err)
 			chatServerSend(DefaultErrorMsg, d.Room)
 			return
 		} else {
-			statsMaps = append(statsMaps, v)
+			statsMaps = append(statsMaps, statsMap)
 		}
 	}
 
@@ -228,24 +270,40 @@ func chatFindVariant(s *Session, d *CommandData, t *Table) {
 */
 
 func automaticStart(s *Session, d *CommandData, t *Table, numPlayers int) {
-	if t == nil {
-		chatServerSend(ChatCommandNotInGameFail, d.Room)
+	if t == nil || d.Room == "lobby" {
+		chatServerSend(NotInGameFail, d.Room)
 		return
 	}
 
 	if t.Running {
-		chatServerSend(ChatCommandStartedFail, d.Room)
+		chatServerSend(StartedFail, d.Room)
 		return
 	}
 
 	if s.UserID() != t.Owner {
-		chatServerSend(ChatCommandNotOwnerFail, d.Room)
+		chatServerSend(NotOwnerFail, d.Room)
 		return
 	}
 
+	if len(d.Args) > 0 {
+		// They specific an argument, so make this take priority
+		if v, err := strconv.Atoi(d.Args[0]); err != nil {
+			chatServerSend("\""+d.Args[0]+"\" is not a number.", d.Room)
+			return
+		} else {
+			numPlayers = v
+		}
+
+		if numPlayers < 2 || numPlayers > 6 {
+			chatServerSend("You can only start a table with 2 to 6 players.", d.Room)
+			return
+		}
+	}
+
 	if len(t.Players) == numPlayers {
-		commandTableStart(s, &CommandData{
+		commandTableStart(s, &CommandData{ // Manual invocation
 			TableID: t.ID,
+			NoLock:  true,
 		})
 	} else {
 		t.AutomaticStart = numPlayers
@@ -258,13 +316,14 @@ func automaticStart(s *Session, d *CommandData, t *Table, numPlayers int) {
 func startIn(t *Table, timeToWait time.Duration, datetimePlannedStart time.Time) {
 	// Sleep until it is time to automatically start
 	time.Sleep(timeToWait)
-	commandMutex.Lock()
-	defer commandMutex.Unlock()
 
 	// Check to see if the table still exists
-	if _, ok := tables[t.ID]; !ok {
+	t2, exists := getTableAndLock(nil, t.ID, false)
+	if !exists || t != t2 {
 		return
 	}
+	t.Mutex.Lock()
+	defer t.Mutex.Unlock()
 
 	// Check to see if the game has already started
 	if t.Running {
@@ -280,15 +339,15 @@ func startIn(t *Table, timeToWait time.Duration, datetimePlannedStart time.Time)
 	for _, p := range t.Players {
 		if p.ID == t.Owner {
 			if !p.Present {
-				room := "table" + strconv.Itoa(t.ID)
-				chatServerSend("Aborting automatic game start since the table creator is away.",
-					room)
+				msg := "Aborting automatic game start since the table creator is away."
+				chatServerSend(msg, t.GetRoomName())
 				return
 			}
 
 			logger.Info(t.GetName() + " Automatically starting (from the /startin command).")
-			commandTableStart(p.Session, &CommandData{
+			commandTableStart(p.Session, &CommandData{ // Manual invocation
 				TableID: t.ID,
+				NoLock:  true,
 			})
 			return
 		}

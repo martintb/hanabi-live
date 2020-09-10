@@ -1,10 +1,10 @@
 // Click functions for the HanabiCard object
 
-// Imports
 import Konva from 'konva';
+import * as modals from '../../modals';
+import * as cardRules from '../rules/card';
 import { STACK_BASE_RANK } from '../types/constants';
 import * as arrows from './arrows';
-import { suitToMsgSuit } from './convert';
 import globals from './globals';
 import HanabiCard from './HanabiCard';
 import * as hypothetical from './hypothetical';
@@ -13,12 +13,10 @@ import * as replay from './replay';
 
 export default function HanabiCardClick(this: HanabiCard, event: Konva.KonvaEventObject<any>) {
   // Speedrunning overrides the normal card clicking behavior
-  // (but do not use the speedrunning behavior if we are in a
-  // solo replay / shared replay / spectating)
+  // (but only use the speedrunning behavior if we are an active player)
   if (
     (globals.options.speedrun || globals.lobby.settings.speedrunMode)
-    && !globals.replay
-    && !globals.spectating
+    && globals.state.playing
   ) {
     return;
   }
@@ -46,7 +44,8 @@ const clickLeft = (card: HanabiCard, event: MouseEvent) => {
     || event.shiftKey
     || event.metaKey
     || card.state.rank === STACK_BASE_RANK // Disable clicking on the stack base
-    || globals.hypothetical // No replay actions should happen in a hypothetical
+    // No replay actions should happen in a hypothetical
+    || globals.state.replay.hypothetical !== null
   ) {
     return;
   }
@@ -55,45 +54,51 @@ const clickLeft = (card: HanabiCard, event: MouseEvent) => {
     // Alt + clicking a card goes to the turn it was drawn
     // (we want to go to the turn before it is drawn, tween the card being drawn,
     // and then indicate the card)
-    const turnBeforeDrawn = card.state.turnDrawn === 0 ? 0 : card.state.turnDrawn - 1;
-    goToTurn(turnBeforeDrawn, true);
-    goToTurn(card.state.turnDrawn, false);
-    goToTurnAndIndicateCard(card.state.turnDrawn, card.state.order);
-  } else if (card.state.isPlayed) {
+    if (card.state.segmentDrawn === null) {
+      // The card was drawn during the initial deal before the first turn
+      replay.goToSegmentAndIndicateCard(0, card.state.order);
+    } else {
+      // The card was drawn after the initial deal
+      // Go to the segment that it was drawn and then fast-forward one segment in order to show the
+      // card tweening into the hand
+      // (we have to record the segment because it will be cleared after the first "goToTurn()")
+      const segmentDrawn = card.state.segmentDrawn;
+      replay.goToSegment(segmentDrawn, true);
+      replay.goToSegmentAndIndicateCard(segmentDrawn + 1, card.state.order);
+    }
+  } else if (cardRules.isPlayed(card.state) && card.state.segmentPlayed !== null) {
     // Clicking on played cards goes to the turn immediately before they were played
-    goToTurnAndIndicateCard(card.state.turnPlayed, card.state.order);
-  } else if (card.state.isDiscarded) {
+    replay.goToSegmentAndIndicateCard(card.state.segmentPlayed, card.state.order);
+  } else if (cardRules.isDiscarded(card.state) && card.state.segmentDiscarded !== null) {
     // Clicking on discarded cards goes to the turn immediately before they were discarded
-    goToTurnAndIndicateCard(card.state.turnDiscarded, card.state.order);
+    replay.goToSegmentAndIndicateCard(card.state.segmentDiscarded, card.state.order);
   }
 };
 
 const clickMiddle = (card: HanabiCard, event: MouseEvent) => {
-  // Disable this for the stack base
-  if (card.state.rank === STACK_BASE_RANK) {
-    return;
-  }
-
   // No actions in this function use modifiers
   if (event.ctrlKey || event.shiftKey || event.altKey || event.metaKey) {
     return;
   }
 
-  // Middle clicking on a card goes to a turn it was first clued
-  if (card.state.turnsClued.length === 0) {
-    return;
+  // Middle clicking on a card goes to the turn it was first clued
+  if (
+    card.state.segmentFirstClued !== null
+    && card.state.rank !== STACK_BASE_RANK // Disable this functionality for the stack base
+  ) {
+    // We add one to the segment so that the clue is visible
+    // (if we go to the turn that the card was clued, then the actual clue has not happened yet)
+    replay.goToSegment(card.state.segmentFirstClued + 1, true);
   }
-  goToTurn(card.state.turnsClued[0], true);
 };
 
 const clickRight = (card: HanabiCard, event: MouseEvent) => {
   // Alt + right-click is a card morph (in a hypothetical)
   if (
-    globals.replay
-    && globals.sharedReplay
-    && globals.amSharedReplayLeader
-    && globals.useSharedTurns
-    && globals.hypothetical
+    globals.state.finished
+    && globals.state.replay.shared !== null
+    && globals.state.replay.shared.amLeader
+    && globals.state.replay.hypothetical !== null
     && !event.ctrlKey
     && !event.shiftKey
     && event.altKey
@@ -108,18 +113,19 @@ const clickRight = (card: HanabiCard, event: MouseEvent) => {
   // (we want it to work no matter what modifiers are being pressed,
   // in case someone is pushing their push-to-talk hotkey while highlighting cards)
   if (
-    globals.replay
-    && globals.sharedReplay
-    && globals.amSharedReplayLeader
-    && globals.useSharedTurns
+    globals.state.finished
+    && globals.state.replay.shared !== null
+    && globals.state.replay.shared.amLeader
+    && globals.state.replay.shared.useSharedSegments
   ) {
     arrows.send(card.state.order, card);
     return;
   }
 
-  // Right-click in a solo replay just displays what card order (in the deck) that it is
-  if (globals.replay && !globals.sharedReplay) {
+  // Right-click in a solo replay just prints out the order of the card
+  if (globals.state.finished && globals.state.replay.shared === null) {
     console.log(`This card's order is: ${card.state.order}`);
+    return;
   }
 
   // Ctrl + shift + right-click is a shortcut for entering the same note as previously entered
@@ -129,8 +135,7 @@ const clickRight = (card: HanabiCard, event: MouseEvent) => {
     && event.shiftKey
     && !event.altKey
     && !event.metaKey
-    && !globals.replay
-    && !globals.spectating
+    && globals.state.playing
   ) {
     card.setNote(globals.lastNote);
     return;
@@ -143,8 +148,7 @@ const clickRight = (card: HanabiCard, event: MouseEvent) => {
     && event.shiftKey
     && !event.altKey
     && !event.metaKey
-    && !globals.replay
-    && !globals.spectating
+    && globals.state.playing
   ) {
     card.appendNote('f');
     return;
@@ -157,8 +161,7 @@ const clickRight = (card: HanabiCard, event: MouseEvent) => {
     && !event.shiftKey
     && event.altKey
     && !event.metaKey
-    && !globals.replay
-    && !globals.spectating
+    && globals.state.playing
   ) {
     card.appendNote('cm');
     return;
@@ -167,14 +170,14 @@ const clickRight = (card: HanabiCard, event: MouseEvent) => {
   // Ctrl + right-click is a local arrow
   // Even if they are not a leader in a shared replay,
   // a user might still want to draw an arrow on a card for demonstration purposes
-  // However, we don't want this functionality in shared replays because
-  // it could be misleading as to who the real replay leader is
+  // However, we don't want to enable this functionality in shared replays because it could be
+  // misleading as to who the real replay leader is
   if (
     event.ctrlKey
     && !event.shiftKey
     && !event.altKey
     && !event.metaKey
-    && !globals.sharedReplay
+    && globals.state.replay.shared === null
   ) {
     arrows.toggle(card);
     return;
@@ -186,32 +189,15 @@ const clickRight = (card: HanabiCard, event: MouseEvent) => {
     && !event.shiftKey
     && !event.altKey
     && !event.metaKey
-    && !globals.replay
+    && !globals.state.finished
   ) {
     notes.openEditTooltip(card);
   }
 };
 
-const goToTurn = (turn: number, fast: boolean) => {
-  if (globals.replay) {
-    replay.checkDisableSharedTurns();
-  } else {
-    replay.enter();
-  }
-  replay.goto(turn, fast);
-};
-
-const goToTurnAndIndicateCard = (turn: number, order: number) => {
-  goToTurn(turn, true);
-
-  // We indicate the card to make it easier to find
-  arrows.hideAll(); // We hide all the arrows first to ensure that the arrow is always shown
-  arrows.toggle(globals.deck[order]);
-};
-
 // Morphing cards allows for creation of hypothetical situations
 const clickMorph = (order: number) => {
-  const cardText = prompt('What card do you want to morph it into?\n(e.g. "b1", "k2", "m3", "45")');
+  const cardText = prompt('What card do you want to morph it into?\n(e.g. "blue 1", "k2", "3pink", "45")');
   if (cardText === null) {
     return;
   }
@@ -219,66 +205,26 @@ const clickMorph = (order: number) => {
   if (cardText === 'blank') {
     // Don't bother with all of the text parsing below
     hypothetical.sendHypoAction({
-      type: 'reveal',
+      type: 'morph',
       order,
-      suit: -1,
+      suitIndex: -1,
       rank: -1,
     });
     return;
   }
 
-  if (cardText.length !== 2) {
-    window.alert('You entered an invalid card.');
-    return;
-  }
-
-  // Parse the suit
-  const suitLetter = cardText[0];
-  let suit = null;
-  for (const variantSuit of globals.variant.suits) {
-    if (suitLetter.toLowerCase() === variantSuit.abbreviation.toLowerCase()) {
-      suit = variantSuit;
-    }
-  }
-  if (suit === null) {
-    const suitNumber = parseInt(cardText[0], 10);
-    if (Number.isNaN(suitNumber)) {
-      let msg = `The letter "${suitLetter}" does nto corresponds to a suit.\n`;
-      const abbreviations = globals.variant.suits.map(
-        (variantSuit) => variantSuit.abbreviation.toLowerCase(),
-      );
-      msg += `The available acronyms are: ${abbreviations}`;
-      window.alert(msg);
-      return;
-    }
-
-    // They are using a number to represent the suit
-    if (suitNumber < 1 || suitNumber > globals.variant.suits.length) {
-      window.alert(`The suit number of "${cardText[0]}" is not valid.`);
-      return;
-    }
-
-    // We want 1 to represent the first suit, etc.
-    suit = globals.variant.suits[suitNumber - 1];
-  }
-  suit = suitToMsgSuit(suit, globals.variant);
-
-  // Parse the rank
-  const rank = parseInt(cardText[1], 10);
-  if (Number.isNaN(rank)) {
-    window.alert(`The rank of "${cardText[1]}" is not a number.`);
-    return;
-  }
-  if (rank < 0 || rank > 7) {
-    window.alert(`The rank of "${cardText[1]}" must be between 0 and 7.`);
+  // We want an exact match, so fullNote is sent as an empty string
+  const cardIdentity = notes.getCardIdentityFromNote(globals.variant, cardText, '');
+  if (cardIdentity.suitIndex === null || cardIdentity.rank === null) {
+    modals.warningShow('You entered an invalid card.');
     return;
   }
 
   // Tell the server that we are morphing a card
   hypothetical.sendHypoAction({
-    type: 'reveal',
+    type: 'morph',
     order,
-    suit,
-    rank,
+    suitIndex: cardIdentity.suitIndex,
+    rank: cardIdentity.rank,
   });
 };

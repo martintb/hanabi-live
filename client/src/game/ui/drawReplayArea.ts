@@ -1,13 +1,12 @@
-// Imports
 import Konva from 'konva';
-import Button from './Button';
+import Button from './controls/Button';
+import SharedTurnsButton from './controls/SharedTurnsButton';
+import Shuttle from './controls/Shuttle';
 import globals from './globals';
 import * as hypothetical from './hypothetical';
 import * as replay from './replay';
-import SharedTurnsButton from './SharedTurnsButton';
-import Shuttle from './Shuttle';
 
-export default (winW: number, winH: number) => {
+export default function drawReplayArea(winW: number, winH: number) {
   const replayAreaValues = {
     x: 0.15,
     y: 0.51,
@@ -24,6 +23,8 @@ export default (winW: number, winH: number) => {
     y: replayAreaValues.y * winH,
     width: replayAreaValues.w * winW,
     height: 0.27 * winH,
+    visible: false,
+    listening: false,
   });
 
   // The thin black rectangle that the replay slider slides on
@@ -40,6 +41,7 @@ export default (winW: number, winH: number) => {
     height: replayBarValues.h * winH,
     fill: 'black',
     cornerRadius: 0.005 * winH,
+    listening: false,
   });
   globals.elements.replayArea.add(globals.elements.replayBar);
 
@@ -49,11 +51,11 @@ export default (winW: number, winH: number) => {
     x: replayBarValues.x * winW,
     y: 0,
     width: replayBarValues.w * winW,
-    height: 0.05 * winH,
-    opacity: 0,
+    height: 0.07 * winH,
     listening: true,
   });
-  replayBarClickRect.on('click', replay.barClick);
+  replayBarClickRect.on('click tap', replay.barClick);
+  replayBarClickRect.on('wheel', replay.barScroll);
   globals.elements.replayArea.add(replayBarClickRect);
 
   const shuttleValues = {
@@ -61,6 +63,7 @@ export default (winW: number, winH: number) => {
     h: 0.03,
     cornerRadius: 0.01,
     stroke: 'black',
+    strokeWidth: 0.001217,
     scale: 0.75,
   };
 
@@ -76,12 +79,14 @@ export default (winW: number, winH: number) => {
     cornerRadius: shuttleValues.cornerRadius * winW,
     fill: '#d1d1d1', // Gray
     stroke: shuttleValues.stroke,
-    visible: !globals.useSharedTurns,
+    strokeWidth: shuttleValues.strokeWidth * winW,
+    visible: false,
     listening: true,
   });
   globals.elements.replayShuttleShared.on('click tap', () => {
-    // This is needed because the shared replay shuttle will block the replay bar
-    replay.goto(globals.sharedReplayTurn, true);
+    if (globals.state.replay.shared !== null) {
+      replay.goToSegment(globals.state.replay.shared.segment, true);
+    }
   });
   globals.elements.replayArea.add(globals.elements.replayShuttleShared);
 
@@ -96,10 +101,13 @@ export default (winW: number, winH: number) => {
     cornerRadius: shuttleValues.cornerRadius * winW,
     fill: '#0000cc', // Blue
     draggable: true,
-    dragBoundFunc: replay.barDrag,
+    dragBoundFunc: replay.shuttleDragBound,
     stroke: shuttleValues.stroke,
+    strokeWidth: shuttleValues.strokeWidth * winW,
     listening: true,
   });
+  globals.elements.replayShuttle.on('dragmove', replay.shuttleDragMove);
+  globals.elements.replayShuttle.on('wheel', replay.barScroll);
   globals.elements.replayArea.add(globals.elements.replayShuttle);
 
   const replayButtonValues = {
@@ -123,10 +131,11 @@ export default (winW: number, winH: number) => {
         y: 0.07 * winH,
         width: replayButtonValues.w * winW,
         height: replayButtonValues.h * winH,
+        listening: true,
       },
       [
-        globals.ImageLoader!.get('replay-back-full')!,
-        globals.ImageLoader!.get('replay-back-full-disabled')!,
+        globals.imageLoader!.get('replay-back-full')!,
+        globals.imageLoader!.get('replay-back-full-disabled')!,
       ],
     );
     globals.elements.replayBackFullButton!.on('click tap', replay.backFull);
@@ -142,8 +151,8 @@ export default (winW: number, winH: number) => {
         height: replayButtonValues.h * winH,
       },
       [
-        globals.ImageLoader!.get('replay-back')!,
-        globals.ImageLoader!.get('replay-back-disabled')!,
+        globals.imageLoader!.get('replay-back')!,
+        globals.imageLoader!.get('replay-back-disabled')!,
       ],
     );
     globals.elements.replayBackButton.on('click tap', () => {
@@ -167,8 +176,8 @@ export default (winW: number, winH: number) => {
         height: replayButtonValues.h * winH,
       },
       [
-        globals.ImageLoader!.get('replay-forward')!,
-        globals.ImageLoader!.get('replay-forward-disabled')!,
+        globals.imageLoader!.get('replay-forward')!,
+        globals.imageLoader!.get('replay-forward-disabled')!,
       ],
     );
     globals.elements.replayForwardButton.on('click tap', () => {
@@ -192,8 +201,8 @@ export default (winW: number, winH: number) => {
         height: replayButtonValues.h * winH,
       },
       [
-        globals.ImageLoader!.get('replay-forward-full')!,
-        globals.ImageLoader!.get('replay-forward-full-disabled')!,
+        globals.imageLoader!.get('replay-forward-full')!,
+        globals.imageLoader!.get('replay-forward-full-disabled')!,
       ],
     );
     globals.elements.replayForwardFullButton.on('click tap', replay.forwardFull);
@@ -210,7 +219,7 @@ export default (winW: number, winH: number) => {
     width: ((replayButtonValues.w * 2) + (replayButtonValues.spacing * 2)) * winW,
     height: replayButtonValues.w * winH,
     text: 'Exit Replay',
-    visible: !globals.replay,
+    visible: !globals.state.finished,
   });
   globals.elements.replayExitButton.on('click tap', replay.exitButton);
   globals.elements.replayArea.add(globals.elements.replayExitButton as any);
@@ -223,30 +232,8 @@ export default (winW: number, winH: number) => {
     h: 0.06,
   };
 
-  // The "Pause Shared Turns" button
-  // (this will be shown when the client receives the "replayLeader" command)
-  globals.elements.pauseSharedTurnsButton = new SharedTurnsButton({
-    width: bottomLeftReplayButtonValues.w * winW,
-    height: bottomLeftReplayButtonValues.h * winH,
-    text: 'Pause Shared Turns',
-    visible: false,
-  });
-  globals.elements.pauseSharedTurnsButton.on('click tap', replay.toggleSharedTurns);
-  globals.elements.replayArea.add(globals.elements.pauseSharedTurnsButton as any);
-
-  // The "Use Shared Turns" button
-  // (this will be shown when the client receives the "replayLeader" command)
-  globals.elements.useSharedTurnsButton = new SharedTurnsButton({
-    width: bottomLeftReplayButtonValues.w * winW,
-    height: bottomLeftReplayButtonValues.h * winH,
-    text: 'Use Shared Turns',
-    visible: false,
-  });
-  globals.elements.useSharedTurnsButton.on('click tap', replay.toggleSharedTurns);
-  globals.elements.replayArea.add(globals.elements.useSharedTurnsButton as any);
-
-  // The previous two buttons will be moved to the left for replay leaders and
-  // centered for non-replay-leaders
+  // The next two buttons will be moved to the left for replay leaders
+  // and centered for non-replay-leaders
   const totalWidth = (replayButtonValues.w * 4) + (replayButtonValues.spacing * 3);
   function setCenter(this: SharedTurnsButton) {
     const x = replayButtonValues.x + ((totalWidth - bottomLeftReplayButtonValues.w) / 2);
@@ -257,10 +244,34 @@ export default (winW: number, winH: number) => {
     this.x(bottomLeftReplayButtonValues.x * winW);
     this.y(bottomLeftReplayButtonValues.y * winH);
   }
-  globals.elements.pauseSharedTurnsButton!.setCenter = setCenter;
-  globals.elements.pauseSharedTurnsButton!.setLeft = setLeft;
-  globals.elements.useSharedTurnsButton!.setCenter = setCenter;
-  globals.elements.useSharedTurnsButton!.setLeft = setLeft;
+
+  // The "Pause Shared Turns" button
+  // (this will be shown when the client receives the "replayLeader" command)
+  globals.elements.pauseSharedTurnsButton = new SharedTurnsButton({
+    width: bottomLeftReplayButtonValues.w * winW,
+    height: bottomLeftReplayButtonValues.h * winH,
+    text: 'Pause Shared Turns',
+    visible: false,
+  });
+  globals.elements.pauseSharedTurnsButton.on('click tap', replay.toggleSharedSegments);
+  globals.elements.pauseSharedTurnsButton.setCenter = setCenter;
+  globals.elements.pauseSharedTurnsButton.setCenter(); // Set it to be center by default
+  globals.elements.pauseSharedTurnsButton.setLeft = setLeft;
+  globals.elements.replayArea.add(globals.elements.pauseSharedTurnsButton as any);
+
+  // The "Use Shared Turns" button
+  // (this will be shown when the client receives the "replayLeader" command)
+  globals.elements.useSharedTurnsButton = new SharedTurnsButton({
+    width: bottomLeftReplayButtonValues.w * winW,
+    height: bottomLeftReplayButtonValues.h * winH,
+    text: 'Use Shared Turns',
+    visible: false,
+  });
+  globals.elements.useSharedTurnsButton.on('click tap', replay.toggleSharedSegments);
+  globals.elements.useSharedTurnsButton.setCenter = setCenter;
+  globals.elements.useSharedTurnsButton.setCenter(); // Set it to be center by default
+  globals.elements.useSharedTurnsButton.setLeft = setLeft;
+  globals.elements.replayArea.add(globals.elements.useSharedTurnsButton as any);
 
   const bottomRightReplayButtonValues = {
     x: replayButtonValues.x + (replayButtonValues.w * 2) + (replayButtonValues.spacing * 2),
@@ -276,13 +287,12 @@ export default (winW: number, winH: number) => {
     width: bottomRightReplayButtonValues.w * winW,
     height: bottomRightReplayButtonValues.h * winH,
     text: 'Enter Hypothetical',
-    visible: globals.replay && globals.amSharedReplayLeader && !globals.hypothetical,
+    visible: false,
   });
   globals.elements.enterHypoButton.on('click tap', hypothetical.start);
   globals.elements.replayArea.add(globals.elements.enterHypoButton as any);
 
   // Add the replay area to the UI
-  globals.elements.replayArea.hide();
   globals.layers.UI.add(globals.elements.replayArea);
-  replay.adjustShuttles(true);
-};
+  replay.adjustShuttles(true); // Skip the animation
+}

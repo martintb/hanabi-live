@@ -2,22 +2,12 @@
 // It is re-created every time when going into a new game
 // (and destroyed when going to the lobby)
 
-// Imports
-import Konva from 'konva';
-import { LABEL_COLOR } from '../../constants';
 import { Globals as LobbyGlobals } from '../../globals';
 import { GameExports } from '../main';
-import * as deck from '../rules/deck';
-import * as variantRules from '../rules/variant';
-import { STACK_BASE_RANK } from '../types/constants';
-import drawCards from './drawCards';
-import drawUI from './drawUI';
+import * as cursor from './cursor';
 import globals, { Globals } from './globals';
-import HanabiCard from './HanabiCard';
 import * as keyboard from './keyboard';
-import LayoutChild from './LayoutChild';
-import Loader from './Loader';
-import pause from './pause';
+import * as replay from './replay';
 import * as timer from './timer';
 import * as turn from './turn';
 
@@ -26,7 +16,7 @@ export default class HanabiUI {
 
   constructor(lobby: LobbyGlobals, game: GameExports) {
     // Since the "HanabiUI" object is being reinstantiated,
-    // we need to explicitly reinitialize all globals varaibles
+    // we need to explicitly reinitialize all globals variables
     // (or else they will retain their old values)
     globals.reset();
 
@@ -40,9 +30,13 @@ export default class HanabiUI {
     globals.game = game; // This is the "gameExports" from the "/src/game/main.ts" file
     // We should also combine this with the UI object in the future
 
-    // Initialize the stage and show the loading screen
-    initStage();
-    showLoadingScreen();
+    initStageSize();
+    cursor.set('default');
+
+    // The HanabiUI object is now instantiated, but none of the actual UI elements are drawn yet
+    // We must wait for the "init" message from the server in order to know how many players are in
+    // the game and what the variant is
+    // Only then can we start drawing the UI
   }
 
   // The following methods are called from various parent functions
@@ -60,30 +54,44 @@ export default class HanabiUI {
     globals.layers.UI.batchDraw();
   }
 
+  suggestTurn(who: string, segment: number) { // eslint-disable-line class-methods-use-this
+    if (
+      globals.state.finished
+      && globals.state.replay.shared !== null
+      && globals.state.replay.shared.amLeader
+      && globals.state.replay.hypothetical === null
+    ) {
+      if (window.confirm(`${who} suggests that we go to turn ${segment}. Agree?`)) {
+        // We minus one to account for the fact that turns are presented to the user starting from 1
+        replay.goToSegment(segment - 1);
+      }
+    }
+  }
+
   destroy() { // eslint-disable-line class-methods-use-this
     keyboard.destroy();
     timer.stop();
     globals.stage.destroy();
-    // window.removeEventListener('resize', resizeCanvas, false);
   }
 
   reshowClueUIAfterWarning() { // eslint-disable-line class-methods-use-this
-    turn.showClueUIAndEnableDragging();
+    turn.showClueUI();
   }
 }
 
 // Initialize and size the stage depending on the window size
-const initStage = () => {
+const initStageSize = () => {
   const ratio = 16 / 9;
 
   let ww = window.innerWidth;
   let wh = window.innerHeight;
 
-  if (ww < 640) {
-    ww = 640;
+  if (ww < 240) {
+    // The stage seems to break for widths of around 235 px or less
+    ww = 240;
   }
-  if (wh < 360) {
-    wh = 360;
+  if (wh < 135) {
+    wh = 135;
   }
 
   let cw;
@@ -107,155 +115,4 @@ const initStage = () => {
   }
   globals.stage.width(cw);
   globals.stage.height(ch);
-};
-
-const showLoadingScreen = () => {
-  const winW = globals.stage.width();
-  const winH = globals.stage.height();
-
-  const loadingLayer = new Konva.Layer();
-
-  const loadingLabel = new Konva.Text({
-    fill: LABEL_COLOR,
-    stroke: '#747278',
-    strokeWidth: 1,
-    text: 'Loading...',
-    align: 'center',
-    x: 0,
-    y: 0.7 * winH,
-    width: winW,
-    height: 0.05 * winH,
-    fontFamily: 'Arial',
-    fontStyle: 'bold',
-    fontSize: 0.05 * winH,
-  });
-  loadingLayer.add(loadingLabel);
-
-  const progresslabel = new Konva.Text({
-    fill: LABEL_COLOR,
-    stroke: '#747278',
-    strokeWidth: 1,
-    text: '0 / 0',
-    align: 'center',
-    x: 0,
-    y: 0.8 * winH,
-    width: winW,
-    height: 0.05 * winH,
-    fontFamily: 'Arial',
-    fontStyle: 'bold',
-    fontSize: 0.05 * winH,
-  });
-  loadingLayer.add(progresslabel);
-
-  globals.stage.add(loadingLayer);
-
-  const loadingProgressCallback = (done: number, total: number) => {
-    progresslabel.text(`${done}/${total}`);
-    loadingLayer.batchDraw();
-  };
-  globals.ImageLoader = new Loader(loadingProgressCallback, loadingFinishedCallback);
-};
-
-const loadingFinishedCallback = () => {
-  // Build images for every card
-  // (with respect to the variant that we are playing
-  // and whether or not we have the colorblind UI feature enabled)
-  globals.cardImages = drawCards(
-    globals.variant,
-    globals.lobby.settings.colorblindMode,
-    globals.lobby.settings.styleNumbers,
-  );
-
-  // Construct a list of all of the cards in the deck
-  initCardsMap();
-
-  // Build all of the reusable card objects
-  initCards();
-
-  // Draw the user interface
-  drawUI();
-
-  // Keyboard hotkeys can only be initialized once the clue buttons are drawn
-  keyboard.init();
-
-  // If the game is paused, darken the background
-  pause();
-
-  // Tell the server that we are finished loading the UI and
-  // we now need the specific actions that have taken place in this game so far
-  globals.lobby.conn!.send('getGameInfo2', {
-    tableID: globals.lobby.tableID,
-  });
-};
-
-const initCardsMap = () => {
-  for (const suit of globals.variant.suits) {
-    if (variantRules.isUpOrDown(globals.variant)) {
-      // 6 is an unknown rank, so we use 7 to represent a "START" card
-      const key = `${suit.name}7`;
-      globals.cardsMap.set(key, 1);
-    }
-    for (let rank = 1; rank <= 5; rank++) {
-      // In a normal suit of Hanabi,
-      // there are three 1's, two 2's, two 3's, two 4's, and one five
-      let amountToAdd = 2;
-      if (rank === 1) {
-        amountToAdd = 3;
-        if (variantRules.isUpOrDown(globals.variant) || suit.reversed) {
-          amountToAdd = 1;
-        }
-      } else if (rank === 5) {
-        amountToAdd = 1;
-        if (suit.reversed) {
-          amountToAdd = 3;
-        }
-      }
-      if (suit.oneOfEach) {
-        amountToAdd = 1;
-      }
-
-      const key = `${suit.name}${rank}`;
-      globals.cardsMap.set(key, amountToAdd);
-    }
-  }
-};
-
-const initCards = () => {
-  globals.deckSize = deck.totalCards(globals.variant);
-  for (let order = 0; order < globals.deckSize; order++) {
-    // Create the "learned" card object
-    // (this must be done before creating the HanabiCard object)
-    globals.learnedCards.push({
-      suit: null,
-      rank: null,
-      revealed: false,
-    });
-
-    // Create the notes for this card
-    // (this must be done before creating the HanabiCard object)
-    globals.ourNotes.push('');
-    globals.allNotes.push([]);
-
-    // Create the HanabiCard object
-    const card = new HanabiCard({
-      order,
-    });
-    globals.deck.push(card);
-
-    // Create the LayoutChild that will be the parent of the card
-    const child = new LayoutChild();
-    child.addCard(card);
-  }
-
-  // Also create objects for the stack bases
-  for (const suit of globals.variant.suits) {
-    globals.learnedCards.push({
-      suit,
-      rank: STACK_BASE_RANK,
-      revealed: true,
-    });
-
-    globals.ourNotes.push('');
-    globals.allNotes.push([]);
-  }
 };

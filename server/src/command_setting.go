@@ -13,10 +13,6 @@ import (
 //   setting: 'false', // All setting values must be strings
 // }
 func commandSetting(s *Session, d *CommandData) {
-	/*
-		Validate
-	*/
-
 	// Validate the setting name
 	if d.Name == "" {
 		s.Warning("The settings name cannot be blank.")
@@ -42,7 +38,7 @@ func commandSetting(s *Session, d *CommandData) {
 
 	// Validate the setting value
 	if fieldType == "bool" {
-		// Bools are stored in the database as 0s and 1s
+		// Booleans are stored in the database as 0s and 1s
 		if d.Setting == "true" {
 			d.Setting = "1"
 		} else if d.Setting == "false" {
@@ -73,13 +69,22 @@ func commandSetting(s *Session, d *CommandData) {
 		}
 	}
 
-	/*
-		Set
-	*/
+	setting(s, d)
+}
 
+func setting(s *Session, d *CommandData) {
 	if err := models.UserSettings.Set(s.UserID(), toSnakeCase(d.Name), d.Setting); err != nil {
 		logger.Error("Failed to set a setting for user \""+s.Username()+"\":", err)
 		s.Error("")
 		return
+	}
+
+	// We also store whether or not they are a Hyphen-ated member on the session itself
+	if d.Name == "hyphenatedConventions" {
+		if d.Setting == "1" {
+			s.Set("hyphenated", true)
+		} else if d.Setting == "0" {
+			s.Set("hyphenated", false)
+		}
 	}
 }

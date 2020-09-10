@@ -9,26 +9,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type VariantData struct {
-	Title string
-	Dev   bool
-
-	Name               string
-	NumGames           int
-	TimePlayed         string
-	NumGamesSpeedrun   int
-	TimePlayedSpeedrun string
-	BestScores         []int
-	NumMaxScores       int
-	MaxScoreRate       string
-	MaxScore           int
-	AverageScore       string
-	NumStrikeouts      int
-	StrikeoutRate      string
-
-	RecentGames []*GameHistory
-}
-
 func httpVariant(c *gin.Context) {
 	// Local variables
 	w := c.Writer
@@ -51,7 +31,7 @@ func httpVariant(c *gin.Context) {
 
 	// Validate that it is a valid variant ID
 	var variantName string
-	if v, ok := variantsID[variantID]; !ok {
+	if v, ok := variantIDMap[variantID]; !ok {
 		http.Error(w, "Error: That is not a valid variant ID.", http.StatusBadRequest)
 		return
 	} else {
@@ -168,11 +148,10 @@ func httpVariant(c *gin.Context) {
 		gameHistoryList = v
 	}
 
-	data := VariantData{
+	data := TemplateData{
 		Title: "Variant Stats",
-		Dev:   false,
 
-		Name:               variantsID[variantID],
+		Name:               variantIDMap[variantID],
 		NumGames:           stats.NumGames,
 		TimePlayed:         timePlayed,
 		NumGamesSpeedrun:   stats.NumGamesSpeedrun,

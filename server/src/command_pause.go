@@ -14,24 +14,18 @@ import (
 //   // ('pause-queue' will automatically pause the game when it gets to their turn)
 // }
 func commandPause(s *Session, d *CommandData) {
-	/*
-		Validate
-	*/
-
-	// Validate that the table exists
-	tableID := d.TableID
-	var t *Table
-	if v, ok := tables[tableID]; !ok {
-		s.Warning("Table " + strconv.Itoa(tableID) + " does not exist.")
+	t, exists := getTableAndLock(s, d.TableID, !d.NoLock)
+	if !exists {
 		return
-	} else {
-		t = v
+	}
+	if !d.NoLock {
+		defer t.Mutex.Unlock()
 	}
 	g := t.Game
 
 	// Validate that the game has started
 	if !t.Running {
-		s.Warning(ChatCommandNotStartedFail)
+		s.Warning(NotStartedFail)
 		return
 	}
 
@@ -42,13 +36,13 @@ func commandPause(s *Session, d *CommandData) {
 	}
 
 	// Validate that they are in the game
-	i := t.GetPlayerIndexFromID(s.UserID())
-	if i == -1 {
-		s.Warning("You are not at table " + strconv.Itoa(tableID) + ", " +
+	playerIndex := t.GetPlayerIndexFromID(s.UserID())
+	if playerIndex == -1 {
+		s.Warning("You are not at table " + strconv.FormatUint(t.ID, 10) + ", " +
 			"so you cannot pause / unpause.")
 		return
 	}
-	p := g.Players[i]
+	p := g.Players[playerIndex]
 
 	// Validate that it is a timed game
 	if !t.Options.Timed {
@@ -57,11 +51,11 @@ func commandPause(s *Session, d *CommandData) {
 	}
 
 	// If a player requests a queued pause on their turn, turn it into a normal pause
-	if d.Setting == "pause-queue" && g.ActivePlayer == i {
+	if d.Setting == "pause-queue" && g.ActivePlayerIndex == playerIndex {
 		d.Setting = "pause"
 	}
 
-	// Validate the settomg
+	// Validate the setting
 	if d.Setting == "pause" {
 		if g.Paused {
 			s.Warning("The game is already paused.")
@@ -87,9 +81,13 @@ func commandPause(s *Session, d *CommandData) {
 		return
 	}
 
-	/*
-		Pause
-	*/
+	pause(s, d, t, playerIndex)
+}
+
+func pause(s *Session, d *CommandData, t *Table, playerIndex int) {
+	// Local variables
+	g := t.Game
+	p := g.Players[playerIndex]
 
 	if d.Setting == "pause-queue" {
 		p.RequestedPause = true
@@ -102,23 +100,23 @@ func commandPause(s *Session, d *CommandData) {
 
 	if d.Setting == "pause" {
 		g.Paused = true
-		g.PauseTime = time.Now()
+		g.PausePlayerIndex = playerIndex
 		g.PauseCount++
-		g.PausePlayer = i
+
+		// Decrement the time that the player has taken so far prior to this pause
+		p.Time -= time.Since(g.DatetimeTurnBegin)
 	} else if d.Setting == "unpause" {
 		g.Paused = false
+		g.PausePlayerIndex = -1
 
-		// Add the time elapsed during the pause to the time recorded when the turn began
-		// (because we use this as a differential to calculate how much time the player took when
-		// they end their turn)
-		g.DatetimeTurnBegin = g.DatetimeTurnBegin.Add(time.Since(g.PauseTime))
-
-		// Send everyone new clock values
-		t.NotifyTime()
+		// Technically, a players turn should not begin when the game is unpaused,
+		// but this variable is only used for decrementing time taken at the end of a player's turn
+		g.DatetimeTurnBegin = time.Now()
 
 		// Restart the function that will check to see if the current player has run out of time
-		// (since the existing function will return and do nothing if the game is paused)
-		go g.CheckTimer(g.Turn, g.PauseCount, g.Players[g.ActivePlayer])
+		// (the old "CheckTimer()" invocation will return and do nothing because the pause count of
+		// the game will not match)
+		go g.CheckTimer(g.Turn, g.PauseCount, g.Players[g.ActivePlayerIndex])
 	}
 
 	t.NotifyPause()
@@ -129,5 +127,18 @@ func commandPause(s *Session, d *CommandData) {
 		msg += "un"
 	}
 	msg += "paused the game."
-	chatServerSend(msg, "table"+strconv.Itoa(t.ID))
+	chatServerSend(msg, t.GetRoomName())
+
+	// If a user has read all of the chat thus far,
+	// mark that they have also read the "pause" message, since it is superfluous
+	for k, v := range t.ChatRead {
+		if v == len(t.Chat)-1 {
+			t.ChatRead[k] = len(t.Chat)
+		}
+	}
+
+	// Send everyone new clock values
+	if d.Setting == "unpause" {
+		t.NotifyTime()
+	}
 }

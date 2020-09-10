@@ -7,6 +7,8 @@ import (
 // iota starts at 0 and counts upwards
 // i.e. statusLobby = 0, statusPregame = 1, etc.
 
+// Every player has a status associated with them for the purposes of showing "where they are" on
+// the user list in the lobby
 const (
 	StatusLobby = iota
 	StatusPregame
@@ -16,23 +18,14 @@ const (
 	StatusSharedReplay
 )
 
-var (
-	status = []string{
-		"Lobby",
-		"Pre-Game",
-		"Playing",
-		"Spectating",
-		"Replay",
-		"Shared Replay",
-	}
-)
-
+// When in a game, players can send certain types of "actions" to the server to communicate what
+// kind of move they want to perform
 const (
 	ActionTypePlay = iota
 	ActionTypeDiscard
 	ActionTypeColorClue
 	ActionTypeRankClue
-	ActionTypeGameOver
+	ActionTypeEndGame // Players cannot send this (internal only)
 )
 
 const (
@@ -48,11 +41,16 @@ const (
 	EndConditionTerminated
 	EndConditionSpeedrunFail
 	EndConditionIdleTimeout
+	EndConditionCharacterSoftlock
+	EndConditionAllOrNothingFail
+	EndConditionAllOrNothingSoftlock
 )
 
+// When in a shared replay, spectators can send certain types of "actions" to the server to
+// communicate what kind of function they want to perform
 const (
 	// Changing the shared turn
-	ReplayActionTypeTurn = iota
+	ReplayActionTypeSegment = iota
 	// Highlighting a card with an indicator arrow
 	ReplayActionTypeArrow
 	// Play one of the arbitrary sound effects included on the server
@@ -69,12 +67,9 @@ const (
 	ReplayActionTypeToggleRevealed
 )
 
-var (
-	// The amount of time that a game is inactive before it is killed by the server
-	idleGameTimeout    = time.Minute * 30
-	idleGameTimeoutDev = time.Hour * 24 * 7 // 7 days
-)
-
+// Certain types of optional game settings can make the game easier
+// We need to keep track of these options when determining the maximum score for a particular
+// variant
 const (
 	ScoreModifierDeckPlays Bitmask = 1 << iota // e.g. 1, 2, 4, and so forth
 	ScoreModifierEmptyClues
@@ -84,6 +79,8 @@ const (
 )
 
 const (
+	WebsiteName = "Hanab Live"
+
 	// The maximum amount of clues (and the amount of clues that players start the game with)
 	MaxClueNum = 8
 
@@ -94,15 +91,15 @@ const (
 	// but this may not always be the case
 	PointsPerSuit = 5
 
-	// The amount of time that someone can be on the waiting list
-	IdleWaitingListTimeout = time.Hour * 8
+	// A "reversed" version of every suit exists
+	SuitReversedSuffix = " Reversed"
 
 	// The amount of time that players have to finish their game once
 	// a server shutdown or restart is initiated
 	ShutdownTimeout = time.Minute * 30
 
-	// A "reversed" version of every suit exists
-	SuitReversedSuffix = " Reversed"
+	// The amount of time that a game is inactive before it is killed by the server
+	IdleGameTimeout = time.Minute * 30
 
 	// The amount of time in between allowed @here Discord alerts
 	DiscordAtHereTimeout = time.Hour * 2
@@ -113,15 +110,15 @@ const (
 	ConsecutiveDiacriticsAllowed = 3
 
 	// Common error messages
-	DefaultErrorMsg           = "Something went wrong. Please contact an administrator."
-	CreateGameFail            = "Failed to create the game. Please contact an administrator."
-	StartGameFail             = "Failed to start the game. Please contact an administrator."
-	InitGameFail              = "Failed to initialize the game. Please contact an administrator."
-	ChatCommandNotInLobbyFail = "You can only perform this command from the lobby."
-	ChatCommandNotInGameFail  = "You can only perform this command while in a game."
-	ChatCommandNotReplayFail  = "You can only perform this command while in a replay."
-	ChatCommandStartedFail    = "The game is already started, so you cannot use that command."
-	ChatCommandNotStartedFail = "The game has not started yet, so you cannot use that command."
-	ChatCommandNotOwnerFail   = "Only the table owner can use that command."
-	ChatCommandNotDiscordFail = "You can only perform this command from the Hanabi Discord server."
+	DefaultErrorMsg = "Something went wrong. Please contact an administrator."
+	CreateGameFail  = "Failed to create the game. Please contact an administrator."
+	StartGameFail   = "Failed to start the game. Please contact an administrator."
+	InitGameFail    = "Failed to initialize the game. Please contact an administrator."
+	NotInLobbyFail  = "You can only perform this command from the lobby."
+	NotInGameFail   = "You can only perform this command while in a game."
+	NotReplayFail   = "You can only perform this command while in a replay."
+	StartedFail     = "The game is already started, so you cannot use that command."
+	NotStartedFail  = "The game has not started yet, so you cannot use that command."
+	NotOwnerFail    = "Only the table owner can use that command."
+	NotDiscordFail  = "You can only perform this command from the Discord server."
 )

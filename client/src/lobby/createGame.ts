@@ -1,14 +1,19 @@
 // The "Create Game" nav button
 
-// Imports
-import { FADE_TIME, SHUTDOWN_TIMEOUT } from '../constants';
+import { SHUTDOWN_TIMEOUT } from '../constants';
 import * as debug from '../debug';
 import { VARIANTS } from '../game/data/gameData';
 import { DEFAULT_VARIANT_NAME } from '../game/types/constants';
 import globals from '../globals';
-import * as misc from '../misc';
+import {
+  closeAllTooltips,
+  getRandomNumber,
+  isEmpty,
+  isKeyOf,
+  parseIntSafe,
+} from '../misc';
 import * as modals from '../modals';
-import Settings from './Settings';
+import Settings from './types/Settings';
 
 // Constants
 const basicVariants = [
@@ -22,7 +27,6 @@ const variantNames = Array.from(VARIANTS.keys());
 // Local variables
 let dropdown1: JQuery<Element>;
 let dropdown2: JQuery<Element>;
-let timeStart: Date;
 
 export const init = () => {
   dropdown1 = $('#create-game-variant-dropdown1');
@@ -33,7 +37,7 @@ export const init = () => {
 
   // The "dice" button will select a random variant from the list
   $('#dice').on('click', () => {
-    const randomVariantIndex = misc.getRandomNumber(0, variantNames.length - 1);
+    const randomVariantIndex = getRandomNumber(0, variantNames.length - 1);
     const randomVariant = variantNames[randomVariantIndex];
     $('#createTableVariant').text(randomVariant);
     dropdown2.val(randomVariant);
@@ -59,6 +63,9 @@ export const init = () => {
 
     // Redraw the tooltip so that the new elements will fit better
     $('#nav-buttons-games-create-game').tooltipster('reposition');
+
+    // Remember the new setting
+    getCheckbox('createTableTimed');
   });
   $('#createTableSpeedrun').change(() => {
     if ($('#createTableSpeedrun').prop('checked')) {
@@ -68,6 +75,18 @@ export const init = () => {
       $('#create-game-timed-row').show();
       $('#create-game-timed-row-spacing').show();
     }
+
+    // Redraw the tooltip so that the new elements will fit better
+    $('#nav-buttons-games-create-game').tooltipster('reposition');
+
+    // Remember the new setting
+    getCheckbox('createTableSpeedrun');
+  });
+
+  // The "Show Extra Options" button
+  $('#create-game-show-extra-options').click(() => {
+    $('#create-game-extra-options').show();
+    $('#create-game-show-extra-options-row').hide();
 
     // Redraw the tooltip so that the new elements will fit better
     $('#nav-buttons-games-create-game').tooltipster('reposition');
@@ -84,6 +103,9 @@ export const init = () => {
       $('#createTableOneLessCard').prop('disabled', false);
       $('#createTableOneLessCardLabel').css('cursor', 'pointer');
     }
+
+    // Remember the new setting
+    getCheckbox('createTableOneLessCard');
   });
   $('#createTableOneLessCard').change(() => {
     if ($('#createTableOneLessCard').is(':checked')) {
@@ -95,6 +117,38 @@ export const init = () => {
       $('#createTableOneExtraCard').prop('disabled', false);
       $('#createTableOneExtraCardLabel').css('cursor', 'pointer');
     }
+
+    // Remember the new setting
+    getCheckbox('createTableOneLessCard');
+  });
+
+  // Check for changes in the various input fields so that we can remember their respective settings
+  $('#create-game-variant-dropdown1').change(() => {
+    getVariant('createTableVariant');
+  });
+  $('#create-game-variant-dropdown2').change(() => {
+    getVariant('createTableVariant');
+  });
+  $('#createTableTimeBaseMinutes').change(() => {
+    getTextboxForTimeBase('createTableTimeBaseMinutes');
+  });
+  $('#createTableTimePerTurnSeconds').change(() => {
+    getTextboxForTimePerTurn('createTableTimePerTurnSeconds');
+  });
+  $('#createTableCardCycle').change(() => {
+    getCheckbox('createTableCardCycle');
+  });
+  $('#createTableDeckPlays').change(() => {
+    getCheckbox('createTableDeckPlays');
+  });
+  $('#createTableEmptyClues').change(() => {
+    getCheckbox('createTableEmptyClues');
+  });
+  $('#createTableAllOrNothing').change(() => {
+    getCheckbox('createTableAllOrNothing');
+  });
+  $('#createTableDetrimentalCharacters').change(() => {
+    getCheckbox('createTableDetrimentalCharacters');
   });
 
   // Pressing enter anywhere will submit the form
@@ -108,7 +162,7 @@ export const init = () => {
   $('#create-game-submit').on('click', submit);
 };
 
-// There are over 1000+ variants on Hanabi Live
+// The website offers over 1000+ variants
 // To prevent confusion, only show the basic variants to the user by default
 // They can select "Search custom variants..." if they want access to the "full" dropdown
 //
@@ -117,13 +171,13 @@ export const init = () => {
 // "create-game-variant-dropdown2" is the full (datalist) dropdown
 const firstVariantDropdownInit = () => {
   // Initialize the 1st variant dropdown with the basic variants
-  for (const variant of basicVariants) {
+  for (const variantName of basicVariants) {
     // As a sanity check, ensure that this variant actually exists in the variants JSON
-    if (!variantNames.includes(variant)) {
-      throw new Error(`The "basic" variant of "${variant}" does not exist in the "variants.json" file.`);
+    if (VARIANTS.get(variantName) === undefined) {
+      throw new Error(`The "basic" variant of "${variantName}" does not exist in the "variants.json" file.`);
     }
 
-    const option = new Option(variant, variant);
+    const option = new Option(variantName, variantName);
     dropdown1.append(option);
   }
   const spacing = new Option('───────────────');
@@ -144,6 +198,7 @@ const firstVariantDropdownInit = () => {
       dropdown1.hide();
       dropdown2.show();
       dropdown2.val('');
+      dropdown2.focus();
       $('#create-game-variant-dropdown2-icon').show();
       $('#dice').show();
     } else {
@@ -186,26 +241,45 @@ const secondVariantDropdownInit = () => {
 
 const submit = () => {
   // We need to mutate some values before sending them to the server
-  const timeBaseMinutes = parseFloat(getTextbox('createTableTimeBaseMinutes'));
-  const timeBase = Math.round(timeBaseMinutes * 60); // The server expects this in seconds
-  const timePerTurnSeconds = getTextbox('createTableTimePerTurnSeconds');
-  const timePerTurn = parseInt(timePerTurnSeconds, 10); // The server expects this in seconds
+  const timeBaseMinutes = getTextboxForTimeBase('createTableTimeBaseMinutes');
+  const timeBaseSeconds = Math.round(timeBaseMinutes * 60); // The server expects this in seconds
 
-  // All "Create Game" settings are stored on the server with the exception of passwords;
-  // passwords are stored locally as cookies
+  // Table names are not saved
+  const name = $('#createTableName').val();
+
+  // Passwords are not stored on the server; instead, they are stored locally as cookies
   const password = $('#createTablePassword').val();
   if (typeof password !== 'string') {
     throw new Error('The value of the "createTablePassword" element was not a string.');
   }
   localStorage.setItem('createTablePassword', password);
 
+  // Game JSON is not saved
+  const gameJSONString = $('#createTableJSON').val();
+  if (typeof gameJSONString !== 'string') {
+    throw new Error('The value of the "createTableJSON" element is not a string.');
+  }
+  let gameJSON: unknown | undefined;
+  if (gameJSONString !== '') {
+    try {
+      gameJSON = JSON.parse(gameJSONString) as unknown;
+    } catch (err) {
+      modals.errorShow('That is not a valid JSON object.');
+      return;
+    }
+    if (typeof gameJSON !== 'object') {
+      modals.errorShow('That is not a valid JSON object.');
+      return;
+    }
+  }
+
   globals.conn!.send('tableCreate', {
-    name: $('#createTableName').val(), // We don't bother to store the table name
+    name,
     options: {
-      variant: getVariant('createTableVariant'), // This is a hidden span field
+      variantName: getVariant('createTableVariant'), // This is a hidden span field
       timed: getCheckbox('createTableTimed'),
-      timeBase,
-      timePerTurn,
+      timeBase: timeBaseSeconds,
+      timePerTurn: getTextboxForTimePerTurn('createTableTimePerTurnSeconds'),
       speedrun: getCheckbox('createTableSpeedrun'),
       cardCycle: getCheckbox('createTableCardCycle'),
       deckPlays: getCheckbox('createTableDeckPlays'),
@@ -216,10 +290,10 @@ const submit = () => {
       detrimentalCharacters: getCheckbox('createTableDetrimentalCharacters'),
     },
     password,
-    alertWaiters: getCheckbox('createTableAlertWaiters'),
+    gameJSON,
   });
 
-  misc.closeAllTooltips();
+  closeAllTooltips();
   $('#nav-buttons-games-create-game').addClass('disabled');
 };
 
@@ -235,28 +309,66 @@ const getCheckbox = (setting: keyof Settings) => {
 
 const getTextbox = (setting: keyof Settings) => {
   const element = $(`#${setting}`);
-  if (!element) {
+  if (element === undefined) {
     throw new Error(`Failed to get the element of "${setting}".`);
   }
-  let value = element.val();
-  if (!value) {
+  const value = element.val();
+  if (isEmpty(value)) {
     throw new Error(`Failed to get the value of element "${setting}".`);
   }
   if (typeof value !== 'string') {
     throw new Error(`The value of element "${setting}" is not a string.`);
   }
-  value = value.trim(); // Trim leading and trailing whitespace
+  return value.trim(); // Remove all leading and trailing whitespace
+};
+
+const getTextboxForTimePerTurn = (setting: keyof Settings) => {
+  const element = $(`#${setting}`);
+  if (element === undefined) {
+    throw new Error(`Failed to get the element of "${setting}".`);
+  }
+
+  const valueString = getTextbox(setting);
+  let value = parseIntSafe(valueString);
+  if (Number.isNaN(value)) {
+    // They have entered an invalid amount of seconds, so revert to using the default value
+    value = 20;
+
+    // Also change the value of the actual element on the page
+    element.val(value.toString());
+  }
+
+  checkChanged(setting, value);
+  return value;
+};
+
+const getTextboxForTimeBase = (setting: keyof Settings) => {
+  const element = $(`#${setting}`);
+  if (element === undefined) {
+    throw new Error(`Failed to get the element of "${setting}".`);
+  }
+
+  const valueString = getTextbox(setting);
+  let value = Number(valueString); // This can be a float
+  if (Number.isNaN(value)) {
+    // They have entered an invalid amount of minutes, so revert to using the default value
+    value = 2;
+
+    // Also change the value of the actual element on the page
+    element.val(value.toString());
+  }
+
   checkChanged(setting, value);
   return value;
 };
 
 const getVariant = (setting: keyof Settings) => {
   const element = $(`#${setting}`);
-  if (!element) {
+  if (element === undefined) {
     throw new Error(`Failed to get the element of "${setting}".`);
   }
   let value = element.text();
-  value = value.trim(); // Trim leading and trailing whitespace
+  value = value.trim(); // Remove all leading and trailing whitespace
   if (value === '') {
     value = 'No Variant';
   }
@@ -264,8 +376,8 @@ const getVariant = (setting: keyof Settings) => {
   return value;
 };
 
-const checkChanged = (settingName: keyof Settings, value: boolean | string) => {
-  if (!misc.isKeyOf(settingName, globals.settings)) {
+export const checkChanged = (settingName: keyof Settings, value: boolean | string | number) => {
+  if (!isKeyOf(settingName, globals.settings)) {
     throw new Error(`The setting of ${settingName} does not exist in the Settings class.`);
   }
 
@@ -279,7 +391,8 @@ const checkChanged = (settingName: keyof Settings, value: boolean | string) => {
   }
 };
 
-// This function is executed when the "Create Game" button is clicked
+// This function is executed every time the "Create Game" button is clicked
+// (before the tooltip is added to the DOM)
 export const before = () => {
   // Don't allow the tooltip to open if the button is currently disabled
   if ($('#nav-buttons-games-create-game').hasClass('disabled')) {
@@ -313,9 +426,7 @@ export const before = () => {
     return false;
   }
 
-  $('#lobby').fadeTo(FADE_TIME, 0.4);
-
-  timeStart = new Date();
+  modals.setShadeOpacity(0.6);
 
   return true;
 };
@@ -327,7 +438,7 @@ export const ready = () => {
   if (debug.amTestUser(globals.username)) {
     $('#createTableName').val('test game');
   } else {
-    $('#createTableName').val(globals.randomName);
+    $('#createTableName').val(globals.randomTableName);
 
     // Get a new random name from the server for the next time we click the button
     globals.conn!.send('getName');
@@ -360,19 +471,41 @@ export const ready = () => {
   // Fill in the "Password" box
   // (this is not stored on the server so we have to retrieve the last password from a cookie)
   const password = localStorage.getItem('createTablePassword');
-  if (password) {
+  if (password !== null && password !== '') {
     $('#createTablePassword').val(password);
   }
 
-  const now = new Date();
-  const diff = now.getTime() - timeStart.getTime();
-  console.log(diff);
+  // Hide the extra options if we do not have any selected
+  if (
+    !globals.settings.createTableSpeedrun
+    && !globals.settings.createTableCardCycle
+    && !globals.settings.createTableDeckPlays
+    && !globals.settings.createTableEmptyClues
+    && !globals.settings.createTableOneExtraCard
+    && !globals.settings.createTableOneLessCard
+    && !globals.settings.createTableAllOrNothing
+    && !globals.settings.createTableDetrimentalCharacters
+  ) {
+    $('#create-game-extra-options').hide();
+    $('#create-game-show-extra-options-row').show();
+  } else {
+    $('#create-game-extra-options').show();
+    $('#create-game-show-extra-options-row').hide();
+  }
+
+  // Hide the JSON field if we are not in a development environment
+  if (window.location.hostname !== 'localhost') {
+    $('#create-game-json-row').hide();
+  }
+
+  // Redraw the tooltip so that the new elements will fit better
+  $('#nav-buttons-games-create-game').tooltipster('reposition');
 };
 
 const readyVariant = (value: any) => {
   // Validate the variant name that we got from the server
   let variant = DEFAULT_VARIANT_NAME;
-  if (typeof value !== 'string' || !variantNames.includes(value)) {
+  if (typeof value !== 'string' || VARIANTS.get(value) === undefined) {
     globals.settings.createTableVariant = variant;
   } else {
     variant = value;

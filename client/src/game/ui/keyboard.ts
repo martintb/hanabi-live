@@ -1,10 +1,10 @@
 // Functions for handling all of the keyboard shortcuts
 
-// Imports
 import Konva from 'konva';
-import { copyStringToClipboard } from '../../misc';
-import { ActionType } from '../types/ClientAction';
-import { MAX_CLUE_NUM } from '../types/constants';
+import Screen from '../../lobby/types/Screen';
+import { copyStringToClipboard, parseIntSafe } from '../../misc';
+import { deckRules, clueTokensRules } from '../rules';
+import ActionType from '../types/ActionType';
 import ReplayActionType from '../types/ReplayActionType';
 import backToLobby from './backToLobby';
 import * as clues from './clues';
@@ -28,7 +28,11 @@ export const init = () => {
 
   // Add "Tab" for player selection
   hotkeyClueMap.set('Tab', () => {
-    globals.elements.clueTargetButtonGroup!.selectNextTarget();
+    if (globals.state.replay.hypothetical === null) {
+      globals.elements.clueTargetButtonGroup!.selectNextTarget();
+    } else {
+      globals.elements.clueTargetButtonGroup2!.selectNextTarget();
+    }
   });
 
   // Add "1", "2", "3", "4", and "5" (for rank clues)
@@ -52,17 +56,19 @@ export const init = () => {
 
   // Enable all of the keyboard hotkeys
   $(document).keydown(keydown);
+  $(document).keyup(keyup);
 };
 
 export const destroy = () => {
   $(document).unbind('keydown', keydown);
+  $(document).unbind('keyup', keyup);
 };
 
 const keydown = (event: JQuery.KeyDownEvent) => {
   // Disable hotkeys if we not currently in a game
   // (this should not be possible, as the handler gets unregistered upon going back to the lobby,
   // but double check just in case)
-  if (globals.lobby.currentScreen !== 'game') {
+  if (globals.lobby.currentScreen !== Screen.Game) {
     return;
   }
 
@@ -72,13 +78,18 @@ const keydown = (event: JQuery.KeyDownEvent) => {
   }
 
   if (event.key === 'Escape') {
+    // Don't do anything if there is a warning or error visible
+    if (globals.lobby.modalShowing) {
+      return;
+    }
+
     // Escape = If the chat is open, close it
     if ($('#game-chat-modal').is(':visible')) {
       globals.game!.chat.hide();
       return;
     }
 
-    if (globals.replay) {
+    if (globals.state.finished) {
       // Escape = If in a replay, exit back to the lobby
       backToLobby();
       return;
@@ -86,6 +97,19 @@ const keydown = (event: JQuery.KeyDownEvent) => {
 
     // Escape = If in an in-game replay, exit back to the game
     replay.exit();
+    return;
+  }
+
+  if (event.key === ' ') { // Space bar
+    // Don't activate global empathy if we are typing in the in-game chat
+    if ($('#game-chat-input').is(':focus')) {
+      return;
+    }
+
+    globals.globalEmpathyEnabled = true;
+    for (const hand of globals.elements.playerHands) {
+      hand.setEmpathy(true);
+    }
     return;
   }
 
@@ -100,10 +124,13 @@ const keydown = (event: JQuery.KeyDownEvent) => {
     // Ctrl + c = Copy the current game ID
     if (
       event.key === 'c'
-      && globals.replay
+      && globals.state.finished
+      // Account for users copying text from the chat window
       && !($('#game-chat-modal').is(':visible'))
     ) {
-      copyStringToClipboard(globals.databaseID.toString());
+      if (globals.state.replay.databaseID !== null) {
+        copyStringToClipboard(globals.state.replay.databaseID.toString());
+      }
       return;
     }
   }
@@ -167,62 +194,81 @@ const keydown = (event: JQuery.KeyDownEvent) => {
   }
 
   // Replay hotkeys
-  if (globals.hypothetical) {
+  if (globals.state.replay.hypothetical !== null) {
     if (event.key === 'ArrowLeft') {
-      hypothetical.sendBackOneTurn();
+      hypothetical.sendBack();
       return;
     }
   } else {
-    if (event.key === 'ArrowLeft') {
-      replay.enter();
-      replay.back();
-      return;
-    }
-    if (event.key === 'ArrowRight') {
-      replay.enter();
-      replay.forward();
-      return;
-    }
-    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
-      if (globals.sharedReplay) {
-        replay.toggleSharedTurns();
-      } else if (!globals.replay) {
-        replay.exit();
+    switch (event.key) {
+      case 'ArrowLeft': {
+        replay.back();
+        return;
       }
-      return;
-    }
-    if (event.key === '[') {
-      replay.enter();
-      replay.backRound();
-      return;
-    }
-    if (event.key === ']') {
-      replay.enter();
-      replay.forwardRound();
-      return;
-    }
-    if (event.key === 'Home') {
-      replay.enter();
-      replay.backFull();
-      return;
-    }
-    if (event.key === 'End') {
-      replay.enter();
-      replay.forwardFull();
-      return;
+
+      case 'ArrowRight': {
+        replay.forward();
+        return;
+      }
+
+      case 'ArrowUp':
+      case 'ArrowDown': {
+        if (globals.state.replay.shared !== null) {
+          replay.toggleSharedSegments();
+        } else if (!globals.state.finished) {
+          replay.exit();
+        }
+        return;
+      }
+
+      case '[': {
+        replay.backRound();
+        return;
+      }
+
+      case ']': {
+        replay.forwardRound();
+        return;
+      }
+
+      case 'Home': {
+        replay.backFull();
+        return;
+      }
+
+      case 'End': {
+        replay.forwardFull();
+        return;
+      }
+
+      default: {
+        break;
+      }
     }
   }
 
   // Check for other keyboard hotkeys
-  if (globals.inReplay || globals.currentPlayerIndex !== globals.playerUs) {
+  const currentPlayerIndex = globals.state.ongoingGame.turn.currentPlayerIndex;
+  const ourPlayerIndex = globals.metadata.ourPlayerIndex;
+  const shouldHaveKeyboardHotkeysForActions = (
+    // If it is our turn in an ongoing-game
+    (!globals.state.replay.active && currentPlayerIndex === ourPlayerIndex)
+    // If we are in a hypothetical and we are the shared replay leader
+    || (
+      globals.state.replay.hypothetical !== null
+      && globals.state.replay.shared !== null
+      && globals.state.replay.shared.amLeader
+    )
+  );
+  if (!shouldHaveKeyboardHotkeysForActions) {
     return;
   }
 
   let hotkeyFunction;
-  if (globals.clues >= 1) {
+  if (globals.state.ongoingGame.clueTokens >= clueTokensRules.getAdjusted(1, globals.variant)) {
     hotkeyFunction = hotkeyClueMap.get(event.key);
   }
-  if (globals.clues < MAX_CLUE_NUM) {
+  if (!clueTokensRules.atMax(globals.state.ongoingGame.clueTokens, globals.variant)) {
     hotkeyFunction = hotkeyFunction || hotkeyDiscardMap.get(event.key);
   }
   hotkeyFunction = hotkeyFunction || hotkeyPlayMap.get(event.key);
@@ -232,14 +278,22 @@ const keydown = (event: JQuery.KeyDownEvent) => {
   }
 };
 
-const sharedReplaySendSound = (sound: string) => {
-  // Only enable sound effects in a shared replay
-  if (!globals.replay || !globals.sharedReplay) {
-    return;
+const keyup = (event: JQuery.KeyUpEvent) => {
+  if (event.key === ' ') { // Space bar
+    globals.globalEmpathyEnabled = false;
+    for (const hand of globals.elements.playerHands) {
+      hand.setEmpathy(false);
+    }
   }
+};
 
-  // Only enable sound effects for shared replay leaders
-  if (!globals.amSharedReplayLeader) {
+const sharedReplaySendSound = (sound: string) => {
+  if (
+    // Only send sound effects in shared replays
+    globals.state.replay.shared === null
+    // Only send sound effects for shared replay leaders
+    || !globals.state.replay.shared.amLeader
+  ) {
     return;
   }
 
@@ -262,55 +316,56 @@ const discard = () => {
 // If playAction is true, it plays a card
 // If playAction is false, it discards a card
 const performAction = (playAction = true) => {
-  const cardOrder = promptOwnHandOrder(playAction ? 'play' : 'discard');
-
-  if (cardOrder === null) {
+  const verb = playAction ? 'play' : 'discard';
+  const target = promptCardOrder(verb);
+  if (target === null) {
     return;
   }
 
-  let type = playAction ? ActionType.Play : ActionType.Discard;
-  let target = cardOrder;
+  const type = playAction ? ActionType.Play : ActionType.Discard;
 
-  if (cardOrder === 'deck') {
-    if (!playAction) {
-      return;
-    }
-
-    type = ActionType.Play;
-    target = globals.deck.length - 1;
+  if (globals.state.replay.hypothetical === null) {
+    globals.lobby.conn!.send('action', {
+      tableID: globals.lobby.tableID,
+      type,
+      target,
+    });
+  } else {
+    hypothetical.send({
+      type,
+      target,
+    });
   }
-
-  globals.lobby.conn!.send('action', {
-    tableID: globals.lobby.tableID,
-    type,
-    target,
-  });
   turn.hideClueUIAndDisableDragging();
 };
 
-// Keyboard actions for playing and discarding cards
-const promptOwnHandOrder = (actionString: string) : string | number | null => {
-  const playerCards = globals.elements.playerHands[globals.playerUs].children;
-  const maxSlotIndex = playerCards.length;
-  const msg = `Enter the slot number (1 to ${maxSlotIndex}) of the card to ${actionString}.`;
+const promptCardOrder = (verb: string) : number | null => {
+  const playerIndex = globals.state.replay.hypothetical === null
+    ? globals.metadata.ourPlayerIndex
+    : globals.state.replay.hypothetical.ongoing.turn.currentPlayerIndex!;
+  const hand = globals.state.replay.hypothetical === null
+    ? globals.state.ongoingGame.hands[playerIndex]
+    : globals.state.replay.hypothetical.ongoing.hands[playerIndex];
+  const maxSlotIndex = hand.length;
+  const msg = `Enter the slot number (1 to ${maxSlotIndex}) of the card to ${verb}.`;
   const response = window.prompt(msg);
 
   if (response === null || response === '') {
     return null;
   }
   if (/^deck$/i.test(response)) {
-    return 'deck';
+    // Card orders start at 0, so the final card order is the length of the deck - 1
+    return deckRules.totalCards(globals.variant) - 1;
   }
-  if (!/^\d+$/.test(response)) {
+  const slot = parseIntSafe(response);
+  if (Number.isNaN(slot)) {
+    return null;
+  }
+  if (slot < 1 || slot > maxSlotIndex) {
     return null;
   }
 
-  const numResponse = parseInt(response, 10);
-  if (numResponse < 1 || numResponse > maxSlotIndex) {
-    return null;
-  }
-
-  return (playerCards[maxSlotIndex - numResponse].children[0] as HanabiCard).state.order;
+  return hand[maxSlotIndex - slot];
 };
 
 const click = (element: Konva.Node) => () => {

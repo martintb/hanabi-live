@@ -10,9 +10,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"github.com/op/go-logging"
+)
+
+const (
+	HTTPReadTimeout  = 5 * time.Second
+	HTTPWriteTimeout = 10 * time.Second
 )
 
 func main() {
@@ -78,11 +84,12 @@ func main() {
 	}
 
 	// Create a new Gin HTTP router
-	gin.SetMode(gin.ReleaseMode) // Comment this out to debug HTTP stuff
-	httpRouter := gin.Default()  // Has the "Logger" and "Recovery" middleware attached
+	gin.SetMode(gin.ReleaseMode)                       // Comment this out to debug HTTP stuff
+	httpRouter := gin.Default()                        // Has the "Logger" and "Recovery" middleware attached
+	httpRouter.Use(gzip.Gzip(gzip.DefaultCompression)) // Add GZip compression middleware
 	httpRouter.StaticFile("/", path.Join(projectPath, "maintenance", "index.html"))
 	httpRouter.Static("/public", path.Join(projectPath, "public"))
-	httpRouter.StaticFile("/favicon.ico", path.Join(projectPath, "public", "img", "favicon.png"))
+	httpRouter.StaticFile("/favicon.ico", path.Join(projectPath, "public", "img", "favicon.ico"))
 
 	if useTLS {
 		// We want all HTTP requests to be redirected to HTTPS
@@ -108,8 +115,8 @@ func main() {
 			HTTPRedirectServerWithTimeout := &http.Server{
 				Addr:         "0.0.0.0:80", // Listen on all IP addresses
 				Handler:      HTTPServeMux,
-				ReadTimeout:  5 * time.Second,
-				WriteTimeout: 10 * time.Second,
+				ReadTimeout:  HTTPReadTimeout,
+				WriteTimeout: HTTPWriteTimeout,
 			}
 			if err := HTTPRedirectServerWithTimeout.ListenAndServe(); err != nil {
 				logger.Fatal("ListenAndServe failed to start on port 80.")
@@ -121,7 +128,7 @@ func main() {
 
 	// Redirect mostly everything to the main maintenance page, e.g. "/"
 	httpRouter.Use(func(c *gin.Context) {
-		path := c.Request.URL.Path // "c.FullPath()" does not work for some reason
+		path := c.Request.URL.Path
 		if path != "/" &&
 			!strings.HasPrefix(path, "/public/") {
 
@@ -136,8 +143,8 @@ func main() {
 	HTTPServerWithTimeout := &http.Server{
 		Addr:         "0.0.0.0:" + strconv.Itoa(port), // Listen on all IP addresses
 		Handler:      httpRouter,
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		ReadTimeout:  HTTPReadTimeout,
+		WriteTimeout: HTTPWriteTimeout,
 	}
 	if useTLS {
 		if err := HTTPServerWithTimeout.ListenAndServeTLS(tlsCertFile, tlsKeyFile); err != nil {

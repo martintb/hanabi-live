@@ -1,171 +1,336 @@
-// Functions for building a state table for every turn
-// (state tables are currently unused but eventually the client will eventually be rewritten to
-// handle state transitions)
+// The main reducer for the game mode, contemplating replays and game actions
 
-// Imports
-import produce, { Draft } from 'immer';
-import { VARIANTS } from '../data/gameData';
-import * as clues from '../rules/clues';
-import { Action } from '../types/actions';
+import produce, {
+  castDraft,
+  Draft,
+  original,
+  setAutoFreeze,
+} from 'immer';
+import * as segmentRules from '../rules/segment';
+import { Action, GameAction } from '../types/actions';
+import CardIdentity from '../types/CardIdentity';
+import GameMetadata from '../types/GameMetadata';
+import GameState from '../types/GameState';
 import State from '../types/State';
+import gameStateReducer from './gameStateReducer';
+import initialGameState from './initialStates/initialGameState';
+import replayReducer from './replayReducer';
+
+// Ensure that immer will always auto-freeze recursive structures (like replay states)
+// This is necessary to prevent massive lag when WebPack bundles in production made
+// This only has to be called once
+setAutoFreeze(true);
 
 const stateReducer = produce((state: Draft<State>, action: Action) => {
   switch (action.type) {
-    // A player just gave a clue
-    // {clue: {type: 0, value: 1}, giver: 1, list: [11], target: 2, turn: 0, type: "clue"}
-    case 'clue': {
-      state.clueTokens -= 1;
-      state.clues.push({
-        type: action.clue.type,
-        value: action.clue.value,
-        giver: action.giver,
-        target: action.target,
-        turn: action.turn,
-      });
+    case 'gameActionList': {
+      // Calculate all the intermediate states
+      const initialState = initialGameState(state.metadata);
 
-      const hand = state.hands[action.target];
-      if (hand) {
-        for (const order of hand) {
-          const card = state.deck[order];
-          card.clues.push({
-            type: action.clue.type,
-            value: action.clue.value,
-            positive: action.list.includes(order),
-          });
-        }
-      } else {
-        console.error(`Failed to get "state.hands[]" with an index of ${action.target}.`);
-      }
+      const {
+        game,
+        states,
+      } = reduceGameActions(action.actions, initialState, state.playing, state.metadata);
+
+      state.ongoingGame = castDraft(game);
+
+      // Initialized, ready to show
+      state.visibleState = state.ongoingGame;
+
+      // We copy the card identities to the global state for convenience
+      updateCardIdentities(state);
+
+      state.replay.states = castDraft(states);
+      state.replay.actions = action.actions;
       break;
     }
 
-    // A player just discarded a card
-    // {failed: false, type: "discard", which: {index: 0, order: 4, rank: 1, suit: 2}}
-    case 'discard': {
-      // Reveal all cards discarded
-      const card = state.deck[action.which.order];
-      if (!card) {
-        console.error(`Failed to get the card for index ${action.which.order}.`);
-        break;
-      }
-      card.suit = action.which.suit;
-      card.rank = action.which.rank;
+    case 'cardIdentities': {
+      // Either we just entered a new replay or an ongoing game ended,
+      // so the server sent us a list of the identities for every card in the deck
+      state.cardIdentities = action.cardIdentities;
 
-      // Remove it from the hand
-      const hand = state.hands[action.which.index];
-      const handIndex = hand.indexOf(action.which.order);
-      if (handIndex !== -1) {
-        hand.splice(handIndex, 1);
-      }
-
-      // Add it to the discard stacks
-      state.discardStacks[card.suit].push(action.which.order);
-
-      if (!action.failed) {
-        state.clueTokens = clues.gainClue(VARIANTS.get(state.variantName)!, state.clueTokens);
-      }
+      // If we were in a variant that scrubbed plays and discards, rehydrate them now
+      state.replay.actions = castDraft(rehydrateScrubbedActions(state, action.cardIdentities));
 
       break;
     }
 
-    // A player just drew a card from the deck
-    // {order: 0, rank: 1, suit: 4, type: "draw", who: 0}
-    case 'draw': {
-      state.deckSize -= 1;
-      state.deck[action.order] = {
-        suit: action.suit,
-        rank: action.rank,
-        clues: [],
+    case 'finishOngoingGame': {
+      if (state.playing) {
+        // We were playing in a game that just ended
+        // Recalculate the whole game as a spectator to fix card possibilities
+        state.playing = false;
+
+        const initialState = initialGameState(state.metadata);
+        const {
+          game,
+          states,
+        } = reduceGameActions(state.replay.actions, initialState, state.playing, state.metadata);
+
+        state.ongoingGame = castDraft(game);
+        state.visibleState = state.ongoingGame;
+        state.replay.states = castDraft(states);
+      }
+
+      // Mark that this game is now finished
+      // The finished view will take care of enabling the UI elements for a shared replay
+      state.finished = true;
+      state.datetimeFinished = action.datetimeFinished;
+
+      // Record the database ID of the game
+      state.replay.databaseID = action.databaseID;
+
+      // If we were in an in-game replay when the game ended,
+      // keep us at the current turn so that we are not taken away from what we are looking at
+      // Otherwise, go to the penultimate segment
+      // We want to use the penultimate segment instead of the final segment,
+      // because the final segment will contain the times for all of the players,
+      // and this will drown out the reason that the game ended
+      const inInGameReplay = state.replay.active;
+      if (state.ongoingGame.turn.segment === null) {
+        throw new Error('The segment for the ongoing game was null when it finished.');
+      }
+      if (state.ongoingGame.turn.segment < 1) {
+        throw new Error('The segment for the ongoing game was less than 1 when it finished.');
+      }
+      const penultimateSegment = state.ongoingGame.turn.segment - 1;
+      if (!inInGameReplay) {
+        state.replay.active = true;
+        state.replay.segment = penultimateSegment;
+      }
+
+      // Initialize the shared replay
+      state.replay.shared = {
+        segment: penultimateSegment,
+        useSharedSegments: !inInGameReplay,
+        leader: action.sharedReplayLeader,
+        amLeader: action.sharedReplayLeader === state.metadata.ourUsername,
       };
-      const hand = state.hands[action.who];
-      if (hand) {
-        hand.push(action.order);
+
+      break;
+    }
+
+    case 'init': {
+      state.datetimeStarted = action.datetimeStarted;
+      state.datetimeFinished = action.datetimeFinished;
+
+      if (action.spectating) {
+        state.playing = false;
+      }
+
+      if (action.replay) {
+        state.playing = false;
+        state.finished = true;
+        state.replay.active = true;
+        state.replay.segment = 0; // In dedicated solo replays, start on the first segment
+        state.replay.databaseID = action.databaseID;
+
+        if (action.sharedReplay) {
+          // In dedicated shared replays, start on the shared replay turn
+          state.replay.segment = action.sharedReplaySegment;
+          state.replay.shared = {
+            segment: action.sharedReplaySegment,
+            useSharedSegments: true,
+            leader: action.sharedReplayLeader,
+            amLeader: action.sharedReplayLeader === state.metadata.ourUsername,
+          };
+        }
+      }
+
+      if (action.paused) {
+        state.pause.active = true;
+        state.pause.playerIndex = action.pausePlayerIndex;
       }
 
       break;
     }
 
-    // A player just played a card
-    // {type: "play", which: {index: 0, order: 4, rank: 1, suit: 2}}
-    // (index is the player index)
-    case 'play': {
-      // Reveal all cards played
-      const card = state.deck[action.which.order];
-      if (!card) {
-        console.error(`Failed to get the card for index ${action.which.order}.`);
-        break;
-      }
-      card.suit = action.which.suit;
-      card.rank = action.which.rank;
-
-      // Remove it from the hand
-      const hand = state.hands[action.which.index];
-      const handIndex = hand.indexOf(action.which.order);
-      if (handIndex !== -1) {
-        hand.splice(handIndex, 1);
-      }
-
-      // Add it to the play stacks
-      state.playStacks[card.suit].push(action.which.order);
-
-      // Get points
-      state.score += 1;
-
-      // Get clues if the stack is complete
-      if (state.playStacks[card.suit].length === 5) {
-        state.clueTokens = clues.gainClue(VARIANTS.get(state.variantName)!, state.clueTokens);
-      }
-
+    case 'replayEnter':
+    case 'replayExit':
+    case 'replaySegment':
+    case 'replaySharedSegment':
+    case 'replayUseSharedSegments':
+    case 'replayLeader':
+    case 'hypoStart':
+    case 'hypoBack':
+    case 'hypoEnd':
+    case 'hypoAction':
+    case 'hypoDrawnCardsShown': {
+      state.replay = replayReducer(
+        state.replay,
+        action,
+        original(state.cardIdentities)!,
+        state.metadata,
+      );
       break;
     }
 
-    // An action has been taken, so there may be a change to game state variables
-    // {clues: 5, doubleDiscard: false, maxScore: 24, score: 18, type: "status"}
-    case 'status': {
-      state.doubleDiscard = action.doubleDiscard;
-      state.maxScore = action.maxScore;
-
-      // TEMP: At this point, check the local state matches the server
-      if (action.score !== state.score) {
-        console.warn('The scores from client and server don\'t match. '
-            + `Client = ${state.score}, Server = ${action.score}`);
-      }
-
-      if (action.clues !== state.clueTokens) {
-        console.warn('The clues from client and server don\'t match. '
-            + `Client = ${state.clueTokens}, Server = ${action.clues}`);
+    case 'premove': {
+      if (action.premove === null) {
+        // Allow the clearing of a premove anytime
+        // (it might be our turn and we are clearing the premove prior to sending our action to the
+        // server)
+        state.premove = null;
+      } else if (
+        // Only allow premoves in ongoing games
+        !state.finished
+        // Only allow premoves when it is not our turn
+        && state.ongoingGame.turn.currentPlayerIndex !== state.metadata.ourPlayerIndex
+      ) {
+        state.premove = action.premove;
       }
 
       break;
     }
 
-    // A player failed to play a card
-    // {num: 1, order: 24, turn: 32, type: "strike"}
-    case 'strike': {
-      state.strikes.push({
-        order: action.order,
-        turn: action.turn,
-      });
+    case 'pause': {
+      state.pause.active = action.active;
+      state.pause.playerIndex = action.playerIndex;
+
+      // If the game is now paused, unqueue any queued pauses
+      if (action.active) {
+        state.pause.queued = false;
+      }
+
       break;
     }
 
-    // A line of text was recieved from the server
-    // {text: "Razgovor plays Black 2 from slot #1", type: "text"}
-    case 'text': {
-      state.log.push(action.text);
+    case 'pauseQueue': {
+      state.pause.queued = action.queued;
       break;
     }
 
-    // It is now a new turn
-    // {num: 0, type: "turn", who: 1}
-    case 'turn': {
-      state.currentPlayerIndex = action.who;
+    case 'spectators': {
+      state.spectators = action.spectators;
       break;
     }
 
-    default:
+    default: {
+      // A new game action happened
+      const previousSegment = state.ongoingGame.turn.segment;
+      state.ongoingGame = gameStateReducer(
+        original(state.ongoingGame),
+        action,
+        state.playing,
+        state.metadata,
+      );
+
+      // We copy the card identities to the global state for convenience
+      updateCardIdentities(state);
+
+      if (segmentRules.shouldStore(state.ongoingGame.turn.segment, previousSegment, action)) {
+        state.replay.states[state.ongoingGame.turn.segment!] = state.ongoingGame;
+      }
+
+      // Save the action so that we can recompute the state at the end of the game
+      state.replay.actions.push(action);
+
       break;
+    }
   }
+
+  // Show the appropriate state depending on the situation
+  state.visibleState = visualStateToShow(state, action);
 }, {} as State);
 
 export default stateReducer;
+
+// Runs through a list of actions from an initial state,
+// and returns the final state and all intermediate states
+const reduceGameActions = (
+  actions: GameAction[],
+  initialState: GameState,
+  playing: boolean,
+  metadata: GameMetadata,
+) => {
+  const states: GameState[] = [initialState];
+  const game = actions.reduce((s: GameState, a: GameAction) => {
+    const nextState = gameStateReducer(s, a, playing, metadata);
+
+    if (segmentRules.shouldStore(nextState.turn.segment, s.turn.segment, a)) {
+      states[nextState.turn.segment!] = nextState;
+    }
+
+    return nextState;
+  }, initialState);
+  return { game, states };
+};
+
+// We keep a copy of each card identity in the global state for convenience
+// After each game action, check to see if we can add any new card identities
+// (or any suit/rank information to existing card identities)
+// We cannot just replace the array every time because we need to keep the "full" deck that the
+// server sends us
+const updateCardIdentities = (state: Draft<State>) => {
+  state.ongoingGame.deck.forEach((newCardIdentity, i) => {
+    if (i >= state.cardIdentities.length) {
+      // Add the new card identity
+      state.cardIdentities[i] = {
+        suitIndex: newCardIdentity.suitIndex,
+        rank: newCardIdentity.rank,
+      };
+    } else {
+      // Update the existing card identity
+      const existingCardIdentity = state.cardIdentities[i];
+      if (existingCardIdentity.suitIndex === null) {
+        existingCardIdentity.suitIndex = newCardIdentity.suitIndex;
+      }
+      if (existingCardIdentity.rank === null) {
+        existingCardIdentity.rank = newCardIdentity.rank;
+      }
+    }
+  });
+};
+
+const visualStateToShow = (state: Draft<State>, action: Action) => {
+  if (state.visibleState === null) {
+    // The state is still initializing, so do not show anything
+    return null;
+  }
+
+  if (state.replay.active) {
+    if (state.replay.hypothetical === null) {
+      // Show the current replay segment
+      const currentReplayState = state.replay.states[state.replay.segment];
+      if (currentReplayState === undefined) {
+        throw new Error(`Failed to find the replay state for segment ${state.replay.segment}.`);
+      }
+      return currentReplayState;
+    }
+
+    // Show the current hypothetical
+    if (state.replay.hypothetical.ongoing === undefined) {
+      throw new Error('The ongoing hypothetical state is undefined.');
+    }
+    return state.replay.hypothetical.ongoing;
+  }
+
+  // After an ongoing game ends, do not automatically show the final segment with the player's times
+  // by default in order to avoid drowning out the reason why the game ended
+  if (action.type === 'playerTimes') {
+    return state.replay.states[state.replay.states.length - 2]; // The penultimate segment
+  }
+
+  // Show the final segment of the current game
+  if (state.ongoingGame === undefined) {
+    throw new Error('The ongoing state is undefined.');
+  }
+  return state.ongoingGame;
+};
+
+const rehydrateScrubbedActions = (state: State, cardIdentities: readonly CardIdentity[]) => (
+  state.replay.actions.map((a) => {
+    if (
+      (a.type === 'play' || a.type === 'discard' || a.type === 'draw')
+      && (a.suitIndex === -1 || a.rank === -1)
+    ) {
+      return ({
+        ...a,
+        suitIndex: cardIdentities[a.order].suitIndex!,
+        rank: cardIdentities[a.order].rank!,
+      });
+    }
+    return a;
+  })
+);

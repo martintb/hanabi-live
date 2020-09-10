@@ -2,26 +2,27 @@ package main
 
 import (
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
-var (
-	newTableID = 0 // We increment the ID for every table created
-)
-
+// Table describes the container that a player can join, whether it is an unstarted game,
+// an ongoing game, a solo replay, a shared replay, etc.
+// A tag of `json:"-"` denotes that the JSON serializer should skip the field when serializing
 type Table struct {
-	ID          int
+	ID          uint64
 	Name        string
 	InitialName string // The name of the table before it was converted to a replay
 
 	Players    []*Player
-	Spectators []*Spectator
+	Spectators []*Spectator `json:"-"`
 	// We keep track of players who have been kicked from the game
 	// so that we can prevent them from rejoining
-	KickedPlayers map[int]struct{}
+	KickedPlayers map[int]struct{} `json:"-"`
 	// We also keep track of spectators who have disconnected
 	// so that we can automatically put them back into the shared replay
-	DisconSpectators map[int]struct{}
+	DisconSpectators map[int]struct{} `json:"-"`
 
 	// This is the user ID of the person who started the table
 	// or the current leader of the shared replay
@@ -29,9 +30,7 @@ type Table struct {
 	Visible bool // Whether or not this table is shown to other users
 	// This is an Argon2id hash generated from the plain-text password
 	// that the table creator sends us
-	PasswordHash string
-	// Whether or not the table was created with the "Alert people" checkbox checked
-	AlertWaiters   bool
+	PasswordHash   string
 	Running        bool
 	Replay         bool
 	AutomaticStart int // See "chatTable.go"
@@ -53,6 +52,10 @@ type Table struct {
 
 	Chat     []*TableChatMessage // All of the in-game chat history
 	ChatRead map[int]int         // A map of which users have read which messages
+
+	// Each table has its own mutex to ensure that only one action can occur at the same time
+	Mutex   sync.Mutex `json:"-"`
+	Deleted bool       `json:"-"` // Used to prevent race conditions
 }
 
 type TableChatMessage struct {
@@ -65,13 +68,15 @@ type TableChatMessage struct {
 
 func NewTable(name string, owner int) *Table {
 	// Get a new table ID
+	tablesMutex.RLock()
+	var newTableID uint64
 	for {
-		newTableID++
+		newTableID = atomic.AddUint64(&tableIDCounter, 1)
 
 		// Ensure that the table ID does not conflict with any existing tables
 		valid := true
-		for _, t := range tables {
-			if t.ID == newTableID {
+		for tableID := range tables {
+			if tableID == newTableID {
 				valid = false
 				break
 			}
@@ -80,11 +85,11 @@ func NewTable(name string, owner int) *Table {
 			break
 		}
 	}
-	tableID := newTableID
+	tablesMutex.RUnlock()
 
 	// Create the table object
 	return &Table{
-		ID:   tableID,
+		ID:   newTableID,
 		Name: name,
 
 		Players:          make([]*Player, 0),
@@ -109,26 +114,37 @@ func NewTable(name string, owner int) *Table {
 
 // CheckIdle is meant to be called in a new goroutine
 func (t *Table) CheckIdle() {
+	// Disable idle timeouts in development
+	if isDev {
+		return
+	}
+
 	// Set the last action
-	commandMutex.Lock()
+	t.Mutex.Lock()
 	t.DatetimeLastAction = time.Now()
-	commandMutex.Unlock()
+	t.Mutex.Unlock()
 
 	// We want to clean up idle games, so sleep for a reasonable amount of time
-	time.Sleep(idleGameTimeout)
-	commandMutex.Lock()
-	defer commandMutex.Unlock()
+	time.Sleep(IdleGameTimeout)
 
 	// Check to see if the table still exists
-	if _, ok := tables[t.ID]; !ok {
+	t2, exists := getTableAndLock(nil, t.ID, false)
+	if !exists || t != t2 {
 		return
 	}
+	t.Mutex.Lock()
+	defer t.Mutex.Unlock()
 
 	// Don't do anything if there has been an action in the meantime
-	if time.Since(t.DatetimeLastAction) < idleGameTimeout {
+	if time.Since(t.DatetimeLastAction) < IdleGameTimeout {
 		return
 	}
 
+	t.EndIdle()
+}
+
+// EndIdle is called when a table has been idle for a while and should be automatically ended
+func (t *Table) EndIdle() {
 	logger.Info(t.GetName() + " Idle timeout has elapsed; ending the game.")
 
 	if t.Replay {
@@ -148,8 +164,9 @@ func (t *Table) CheckIdle() {
 			s = newFakeSession(sp.ID, sp.Name)
 			logger.Info("Created a new fake session in the \"CheckIdle()\" function.")
 		}
-		commandTableUnattend(s, &CommandData{
+		commandTableUnattend(s, &CommandData{ // Manual invocation
 			TableID: t.ID,
+			NoLock:  true,
 		})
 	}
 
@@ -163,24 +180,27 @@ func (t *Table) CheckIdle() {
 	if t.Running {
 		// We need to end a game that has started
 		// (this will put everyone in a non-shared replay of the idle game)
-		commandAction(s, &CommandData{
+		commandAction(s, &CommandData{ // Manual invocation
 			TableID: t.ID,
-			Type:    ActionTypeGameOver,
+			Type:    ActionTypeEndGame,
+			Target:  -1,
 			Value:   EndConditionIdleTimeout,
+			NoLock:  true,
 		})
 	} else {
-		// We need to end a game that hasn't started yet
+		// We need to end a game that has not started yet
 		// Force the owner to leave, which should subsequently eject everyone else
 		// (this will send everyone back to the main lobby screen)
-		commandTableLeave(s, &CommandData{
+		commandTableLeave(s, &CommandData{ // Manual invocation
 			TableID: t.ID,
+			NoLock:  true,
 		})
 	}
 }
 
 func (t *Table) GetName() string {
 	g := t.Game
-	name := "Table #" + strconv.Itoa(t.ID) + " (" + t.Name + ") - "
+	name := "Table #" + strconv.FormatUint(t.ID, 10) + " (" + t.Name + ") - "
 	if g == nil {
 		name += "Not started"
 	} else {
@@ -188,6 +208,11 @@ func (t *Table) GetName() string {
 	}
 	name += " - "
 	return name
+}
+
+func (t *Table) GetRoomName() string {
+	// Various places in the code base check for room names with a prefix of "table"
+	return "table" + strconv.FormatUint(t.ID, 10)
 }
 
 func (t *Table) GetPlayerIndexFromID(id int) int {
@@ -230,7 +255,7 @@ func (t *Table) GetOwnerSession() *Session {
 	}
 
 	if s == nil {
-		logger.Error("Failed to find the owner for table " + strconv.Itoa(t.ID) + ".")
+		logger.Error("Failed to find the owner for table " + strconv.FormatUint(t.ID, 10) + ".")
 		s = newFakeSession(-1, "Unknown")
 		logger.Info("Created a new fake session in the \"GetOwnerSession()\" function.")
 	}
@@ -239,7 +264,7 @@ func (t *Table) GetOwnerSession() *Session {
 }
 
 // Get a list of online user sessions that should be notified about actions and other important
-// eventss from this table
+// events from this table
 // We do not want to notify everyone about every table, as that would constitute a lot of spam
 // Only notify:
 // 1) players who are currently in the game
@@ -280,11 +305,41 @@ func (t *Table) GetNotifySessions(excludePlayers bool) []*Session {
 
 	// Go through the map and build a list of users that happen to be currently online
 	notifySessions := make([]*Session, 0)
+	sessionsMutex.RLock()
 	for userID := range notifyMap {
 		if s, ok := sessions[userID]; ok {
 			notifySessions = append(notifySessions, s)
 		}
 	}
+	sessionsMutex.RUnlock()
 
 	return notifySessions
+}
+
+func (t *Table) GetSharedReplayLeaderName() string {
+	// Get the username of the game owner
+	// (the "Owner" field is used to store the leader of the shared replay)
+	for _, sp := range t.Spectators {
+		if sp.ID == t.Owner {
+			return sp.Name
+		}
+	}
+
+	// The leader is not currently present,
+	// so try getting their username from the players object
+	for _, p := range t.Players {
+		if p.ID == t.Owner {
+			return p.Name
+		}
+	}
+
+	// The leader is not currently present and was not a member of the original game,
+	// so we need to look up their username from the database
+	if v, err := models.Users.GetUsername(t.Owner); err != nil {
+		logger.Error("Failed to get the username for user "+strconv.Itoa(t.Owner)+
+			" who is the owner of table:", t.ID)
+		return "(Unknown)"
+	} else {
+		return v
+	}
 }

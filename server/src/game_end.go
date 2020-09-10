@@ -16,79 +16,26 @@ func (g *Game) End() {
 	}
 	logger.Info(t.GetName() + "Ended with a score of " + strconv.Itoa(g.Score) + ".")
 
-	// Append a final action with a listing of every card in the deck
-	// (so that the client will have it for hypotheticals)
-	deck := make([]SimpleCard, 0)
-	for _, c := range g.Deck {
-		deck = append(deck, SimpleCard{
-			Suit: c.Suit,
-			Rank: c.Rank,
-		})
-	}
-	g.Actions = append(g.Actions, ActionDeckOrder{
-		Type: "deckOrder",
-		Deck: deck,
-	})
-	t.NotifyGameAction()
-
 	// There will be no times associated with a replay, so don't bother with the rest of the code
-	if g.ExtraOptions.Replay {
+	if g.ExtraOptions.NoWriteToDatabase {
 		return
 	}
 
 	// Send text messages showing how much time each player finished with
-	// (this won't appear initially unless the user clicks back and then forward again)
+	// and the duration of the game
+	// JavaScript expects time in milliseconds
+	playerTimes := make([]int64, 0)
 	for _, p := range g.Players {
-		text := p.Name + " "
-		if g.Options.Timed {
-			text += "had " + durationToString(p.Time) + " left"
-		} else {
-			// Player times are negative in untimed games
-			text += "took: " + durationToString(p.Time*-1)
-		}
-		g.Actions = append(g.Actions, ActionText{
-			Type: "text",
-			Text: text,
-		})
-		t.NotifyGameAction()
-		logger.Info(t.GetName() + text)
+		milliseconds := int64(p.Time / time.Millisecond)
+		playerTimes = append(playerTimes, milliseconds)
 	}
-
-	// Send a text message showing how much time the game took in total
-	totalTime := g.DatetimeFinished.Sub(g.DatetimeStarted)
-	text := "The total game duration was: " + durationToString(totalTime)
-	g.Actions = append(g.Actions, ActionText{
-		Type: "text",
-		Text: text,
+	duration := int64(g.DatetimeFinished.Sub(g.DatetimeStarted) / time.Millisecond)
+	g.Actions = append(g.Actions, ActionPlayerTimes{
+		Type:        "playerTimes",
+		PlayerTimes: playerTimes,
+		Duration:    duration,
 	})
 	t.NotifyGameAction()
-	logger.Info(t.GetName() + text)
-
-	// Advance a turn so that the finishing times are separated from the final action of the game
-	g.Turn++
-	t.NotifyTurn()
-
-	// Notify everyone that the game is over
-	t.NotifyGameOver()
-
-	// Send "reveal" messages to each player about the missing cards in their hand
-	for _, gp := range g.Players {
-		p := t.Players[gp.Index]
-		if p.Present {
-			for _, c := range gp.Hand {
-				type RevealMessage struct {
-					Suit  int `json:"suit"`
-					Rank  int `json:"rank"`
-					Order int `json:"order"` // The ID of the card (based on its order in the deck)
-				}
-				p.Session.Emit("reveal", &RevealMessage{
-					Suit:  c.Suit,
-					Rank:  c.Rank,
-					Order: c.Order,
-				})
-			}
-		}
-	}
 
 	// Notify everyone that the table was deleted
 	// (we will send a new table message later for the shared replay)
@@ -101,6 +48,7 @@ func (g *Game) End() {
 	for _, p := range t.Players {
 		if p.Session != nil {
 			p.Session.Set("status", StatusLobby)
+			p.Session.Set("tableID", uint64(0))
 			notifyAllUser(p.Session)
 		}
 	}
@@ -112,7 +60,7 @@ func (g *Game) End() {
 
 	// Send a "gameHistory" message to all the players in the game
 	var numGamesOnThisSeed int
-	if v, err := models.Games.GetNumGamesOnThisSeed(g.Seed); err != nil {
+	if v, err := models.Seeds.GetNumGames(g.Seed); err != nil {
 		logger.Error("Failed to get the number of games on seed "+g.Seed+":", err)
 		return
 	} else {
@@ -125,8 +73,8 @@ func (g *Game) End() {
 	sortStringsCaseInsensitive(playerNames)
 	gameHistoryList := make([]*GameHistory, 0)
 	gameHistoryList = append(gameHistoryList, &GameHistory{
-		ID:                 g.ID, // Recorded in the "WriteDatabase()" function above
-		NumPlayers:         len(g.Players),
+		// The ID is recorded in the "WriteDatabase()" function above
+		ID:                 g.ExtraOptions.DatabaseID,
 		Options:            g.Options,
 		Seed:               g.Seed,
 		Score:              g.Score,
@@ -157,7 +105,6 @@ func (g *Game) WriteDatabase() error {
 
 	row := GameRow{
 		Name:             t.Name,
-		NumPlayers:       len(g.Players),
 		Options:          g.Options,
 		Seed:             g.Seed,
 		Score:            g.Score,
@@ -170,14 +117,16 @@ func (g *Game) WriteDatabase() error {
 		logger.Error("Failed to insert the game row:", err)
 		return err
 	} else {
-		g.ID = v
+		t.ExtraOptions.DatabaseID = v
 	}
 
 	// Next, we insert rows for each of the participants
-	for i, gp := range g.Players {
+	gameParticipantsRows := make([]*GameParticipantsRow, 0)
+	for _, gp := range g.Players {
 		p := t.Players[gp.Index]
 
 		characterID := 0
+		characterMetadata := 0
 		if t.Options.DetrimentalCharacters {
 			if gp.Character == "n/a" {
 				characterID = -1
@@ -189,131 +138,155 @@ func (g *Game) WriteDatabase() error {
 						" does not exist in the characters map")
 				} else {
 					characterID = v.ID
+
+					// -1 is considered to be "null" metadata
+					// Since most characters have null metadata,
+					// we save space in the database by storing -1 as 0
+					// However, if some characters have a metadata of 0, it is meaningful
+					// (e.g. corresponding to the 0th suit)
+					// Thus, we store meaningful metadata in the database as 1 + the value to make
+					// it clear that it is not a null value
+					if v.WriteMetadataToDatabase {
+						characterMetadata = gp.CharacterMetadata + 1
+					}
 				}
 			}
 		}
 
-		if err := models.GameParticipants.Insert(
-			g.ID,
-			p.ID,
-			gp.Index,
-			characterID,
-			gp.CharacterMetadata,
-		); err != nil {
-			logger.Error("Failed to insert game participant row #"+strconv.Itoa(i)+":", err)
+		gameParticipantsRows = append(gameParticipantsRows, &GameParticipantsRow{
+			GameID:              t.ExtraOptions.DatabaseID,
+			UserID:              p.ID,
+			Seat:                gp.Index,
+			CharacterAssignment: characterID,
+			CharacterMetadata:   characterMetadata,
+		})
+	}
+	if err := models.GameParticipants.BulkInsert(gameParticipantsRows); err != nil {
+		logger.Error("Failed to insert the game participant rows:", err)
+		return err
+	}
+
+	// Next, we insert rows for each of the actions
+	gameActionRows := make([]*GameActionRow, 0)
+	for i, action := range g.Actions2 {
+		gameActionRows = append(gameActionRows, &GameActionRow{
+			GameID: t.ExtraOptions.DatabaseID,
+			Turn:   i,
+			Type:   action.Type,
+			Target: action.Target,
+			Value:  action.Value,
+		})
+	}
+	if len(gameActionRows) > 0 {
+		if err := models.GameActions.BulkInsert(gameActionRows); err != nil {
+			logger.Error("Failed to insert the game action rows:", err)
 			return err
 		}
 	}
 
 	// Next, we insert rows for each note
-	for i, gp := range g.Players {
+	gameParticipantNotesRows := make([]*GameParticipantNotesRow, 0)
+	for _, gp := range g.Players {
 		p := t.Players[gp.Index]
 
 		for j, note := range gp.Notes {
 			if note == "" {
 				continue
 			}
-			if err := models.GameParticipantNotes.Insert(p.ID, g.ID, j, note); err != nil {
-				logger.Error("Failed to insert the row for note #"+strconv.Itoa(j)+
-					" for game participant #"+strconv.Itoa(i)+":", err)
-				// Do not return on failed note insertion,
-				// since it should not affect subsequent operations
-			}
-		}
-	}
 
-	// Next, we insert rows for each of the actions
-	for i, action := range g.Actions2 {
-		// The index of the action in the slice is equivalent to the turn number that the
-		// action happened
-		if err := models.GameActions.Insert(g.ID, i, action); err != nil {
-			logger.Error("Failed to insert row for action #"+strconv.Itoa(i)+":", err)
-			return err
+			gameParticipantNotesRows = append(gameParticipantNotesRows, &GameParticipantNotesRow{
+				GameID:    t.ExtraOptions.DatabaseID,
+				UserID:    p.ID,
+				CardOrder: j,
+				Note:      note,
+			})
 		}
 	}
-
-	// If the game ended in a special way, we also need to insert an "game over" action
-	var gameOverAction *GameAction
-	if g.EndCondition == EndConditionTimeout {
-		gameOverAction = &GameAction{
-			Type:   ActionTypeGameOver,
-			Target: g.EndPlayer,
-			Value:  EndConditionTimeout,
-		}
-	} else if g.EndCondition == EndConditionTerminated {
-		gameOverAction = &GameAction{
-			Type:   ActionTypeGameOver,
-			Target: g.EndPlayer,
-			Value:  EndConditionTerminated,
-		}
-	} else if g.EndCondition == EndConditionIdleTimeout {
-		gameOverAction = &GameAction{
-			Type:   ActionTypeGameOver,
-			Target: 0,
-			Value:  EndConditionIdleTimeout,
-		}
-	}
-	if gameOverAction != nil {
-		if err := models.GameActions.Insert(g.ID, len(g.Actions2), gameOverAction); err != nil {
-			logger.Error("Failed to insert the game over action:", err)
-			return err
+	if len(gameParticipantNotesRows) > 0 {
+		if err := models.GameParticipantNotes.BulkInsert(gameParticipantNotesRows); err != nil {
+			logger.Error("Failed to insert the game participants notes rows:", err)
+			// Do not return on failed note insertion,
+			// since it should not affect subsequent operations
 		}
 	}
 
 	// Next, we insert rows for each chat message (if any)
+	chatLogRows := make([]*ChatLogRow, 0)
 	for _, chatMsg := range t.Chat {
-		room := "table" + strconv.Itoa(t.ID)
-		if err := models.ChatLog.Insert(chatMsg.UserID, chatMsg.Msg, room); err != nil {
-			logger.Error("Failed to insert a chat message into the database:", err)
+		chatLogRows = append(chatLogRows, &ChatLogRow{
+			UserID:  chatMsg.UserID,
+			Message: chatMsg.Msg,
+			Room:    t.GetRoomName(),
+		})
+	}
+	if len(chatLogRows) > 0 {
+		if err := models.ChatLog.BulkInsert(chatLogRows); err != nil {
+			logger.Error("Failed to insert the chat message rows:", err)
 			// Do not return on failed chat insertion,
 			// since it should not affect subsequent operations
 		}
 	}
 
 	// Next, we insert rows for each tag (if any)
+	gameTagsRows := make([]*GameTagsRow, 0)
 	for tag, userID := range g.Tags {
-		if err := models.GameTags.Insert(g.ID, userID, tag); err != nil {
-			logger.Error("Failed to insert a tag into the database:", err)
+		gameTagsRows = append(gameTagsRows, &GameTagsRow{
+			GameID: t.ExtraOptions.DatabaseID,
+			UserID: userID,
+			Tag:    tag,
+		})
+	}
+	if len(gameTagsRows) > 0 {
+		if err := models.GameTags.BulkInsert(gameTagsRows); err != nil {
+			logger.Error("Failed to insert the tag rows:", err)
 			// Do not return on failed tag insertion,
 			// since it should not affect subsequent operations
 		}
 	}
 
-	// Compute the integer modifier for this game,
-	// corresponding to the "ScoreModifier" constants in "constants.go"
-	var modifier Bitmask
-	if g.Options.DeckPlays {
-		modifier.AddFlag(ScoreModifierDeckPlays)
-	}
-	if g.Options.EmptyClues {
-		modifier.AddFlag(ScoreModifierEmptyClues)
-	}
-	if g.Options.OneExtraCard {
-		modifier.AddFlag(ScoreModifierOneExtraCard)
-	}
-	if g.Options.OneLessCard {
-		modifier.AddFlag(ScoreModifierOneLessCard)
-	}
-	if g.Options.AllOrNothing {
-		modifier.AddFlag(ScoreModifierAllOrNothing)
+	// Finally, we update the seeds table with the number of games played on this seed
+	if err := models.Seeds.UpdateNumGames(g.Seed); err != nil {
+		logger.Error("Failed to update the number of games in the seeds table:", err)
+		// Do not return on a failed seeds update,
+		// since it should not affect subsequent operations
 	}
 
+	// We also need to update stats in the database, but that can be done in the background
+	go g.WriteDatabaseStats()
+
+	logger.Info("Finished core database actions for table " + strconv.FormatUint(t.ID, 10) +
+		" (to database ID " + strconv.Itoa(t.ExtraOptions.DatabaseID) + ").")
+	return nil
+}
+
+// WriteDatabaseStats is meant to be called in a new goroutine
+// Updating the stats is not as important as writing the core data for a game,
+// so it can be handled in the background
+func (g *Game) WriteDatabaseStats() {
+	// Local variables
+	t := g.Table
+	variant := variants[g.Options.VariantName]
+	// 2-player is at index 0, 3-player is at index 1, etc.
+	bestScoreIndex := g.Options.NumPlayers - 2
+
 	// Update the variant-specific stats for each player
+	modifier := g.Options.GetModifier()
 	for _, p := range t.Players {
 		// Get their current best scores
-		var userStats UserStatsRow
-		if v, err := models.UserStats.Get(p.ID, variants[g.Options.Variant].ID); err != nil {
+		var userStats *UserStatsRow
+		if v, err := models.UserStats.Get(p.ID, variant.ID); err != nil {
 			logger.Error("Failed to get the stats for user "+p.Name+":", err)
 			continue
 		} else {
 			userStats = v
 		}
 
-		// 2-player is at index 0, 3-player is at index 1, etc.
-		bestScore := userStats.BestScores[len(g.Players)-2]
-		if g.Score > bestScore.Score ||
-			(g.Score == bestScore.Score && modifier < bestScore.Modifier) {
-
+		thisScore := &BestScore{
+			Score:    g.Score,
+			Modifier: modifier,
+		}
+		bestScore := userStats.BestScores[bestScoreIndex]
+		if thisScore.IsBetterThan(bestScore) {
 			bestScore.Score = g.Score
 			bestScore.Modifier = modifier
 		}
@@ -321,11 +294,7 @@ func (g *Game) WriteDatabase() error {
 		// Update their stats
 		// (even if they did not get a new best score,
 		// we still want to update their average score and strikeout rate)
-		if err := models.UserStats.Update(
-			p.ID,
-			variants[g.Options.Variant].ID,
-			userStats,
-		); err != nil {
+		if err := models.UserStats.Update(p.ID, variant.ID, userStats); err != nil {
 			logger.Error("Failed to update the stats for user "+p.Name+":", err)
 			continue
 		}
@@ -333,18 +302,16 @@ func (g *Game) WriteDatabase() error {
 
 	// Get the current stats for this variant
 	var variantStats VariantStatsRow
-	if v, err := models.VariantStats.Get(variants[g.Options.Variant].ID); err != nil {
-		logger.Error("Failed to get the stats for variant "+
-			strconv.Itoa(variants[g.Options.Variant].ID)+":", err)
-		return err
+	if v, err := models.VariantStats.Get(variant.ID); err != nil {
+		logger.Error("Failed to get the stats for variant "+strconv.Itoa(variant.ID)+":", err)
+		return
 	} else {
 		variantStats = v
 	}
 
 	// If the game was played with no modifiers, update the stats for this variant
 	if modifier == 0 {
-		// 2-player is at index 0, 3-player is at index 1, etc.
-		bestScore := variantStats.BestScores[len(g.Players)-2]
+		bestScore := variantStats.BestScores[bestScoreIndex]
 		if g.Score > bestScore.Score {
 			bestScore.Score = g.Score
 		}
@@ -353,18 +320,10 @@ func (g *Game) WriteDatabase() error {
 	// Write the updated stats to the database
 	// (even if the game was played with modifiers,
 	// we still need to update the number of games played)
-	if err := models.VariantStats.Update(
-		variants[g.Options.Variant].ID,
-		variants[g.Options.Variant].MaxScore,
-		variantStats,
-	); err != nil {
-		logger.Error("Failed to update the stats for variant "+
-			strconv.Itoa(variants[g.Options.Variant].ID)+":", err)
-		return err
+	if err := models.VariantStats.Update(variant.ID, variant.MaxScore, variantStats); err != nil {
+		logger.Error("Failed to update the stats for variant "+strconv.Itoa(variant.ID)+":", err)
+		return
 	}
-
-	logger.Info("Finished database actions for game " + strconv.Itoa(t.ID) + ".")
-	return nil
 }
 
 func (t *Table) ConvertToSharedReplay() {
@@ -372,7 +331,7 @@ func (t *Table) ConvertToSharedReplay() {
 
 	t.Replay = true
 	t.InitialName = t.Name
-	t.Name = "Shared replay for game #" + strconv.Itoa(g.ID)
+	t.Name = "Shared replay for game #" + strconv.Itoa(t.ExtraOptions.DatabaseID)
 	// Update the "EndTurn" field (since we incremented the final turn above in an artificial way)
 	g.EndTurn = g.Turn
 	// Initialize the shared replay on the 2nd to last turn (since the end times are not important)
@@ -403,11 +362,11 @@ func (t *Table) ConvertToSharedReplay() {
 
 		// Add the new spectator
 		sp := &Spectator{
-			ID:      p.ID,
-			Name:    p.Name,
-			Session: p.Session,
-			// There are notes for every card in the deck + the stack bases for each suit
-			Notes: make([]string, len(g.Deck)+len(variants[t.Options.Variant].Suits)),
+			ID:                   p.ID,
+			Name:                 p.Name,
+			Session:              p.Session,
+			ShadowingPlayerIndex: -1, // To indicate that they are not shadowing anyone
+			Notes:                make([]string, g.GetNotesSize()),
 		}
 		t.Spectators = append(t.Spectators, sp)
 		logger.Info("Converted " + p.Name + " to a spectator.")
@@ -415,7 +374,9 @@ func (t *Table) ConvertToSharedReplay() {
 
 	// End the shared replay if no-one is left
 	if len(t.Spectators) == 0 {
-		delete(tables, t.ID)
+		deleteTable(t)
+		logger.Info("Ended table #" + strconv.FormatUint(t.ID, 10) +
+			" because no-one was present when the game ended.")
 		return
 	}
 
@@ -433,7 +394,7 @@ func (t *Table) ConvertToSharedReplay() {
 			}
 		}
 
-		if t.Owner != -1 {
+		if t.Owner == -1 {
 			// All of the players are away, so make the first spectator the leader
 			t.Owner = t.Spectators[0].ID
 			logger.Info("All players are offline; set the new leader to be:", t.Spectators[0].Name)
@@ -448,28 +409,22 @@ func (t *Table) ConvertToSharedReplay() {
 	}
 	t.NotifyConnected()
 
+	// Give all of the players and spectators the full listing of the cards in the deck
+	t.NotifyCardIdentities()
+
+	// Notify everyone that the game is over and that they should prepare the UI for a shared replay
+	t.NotifyFinishOngoingGame()
+
 	for _, sp := range t.Spectators {
 		// Reset everyone's status (both players and spectators are now spectators)
 		if sp.Session != nil {
 			sp.Session.Set("status", StatusSharedReplay)
+			sp.Session.Set("tableID", t.ID)
 			notifyAllUser(sp.Session)
 		}
 
-		// Activate the Replay Leader label
-		sp.Session.NotifyReplayLeader(t, false)
-
 		// Send them the notes from all the players & spectators
-		sp.Session.NotifyNoteList(t)
-
-		// Send them the database ID
-		type IDMessage struct {
-			TableID int `json:"tableID"`
-			ID      int `json:"id"`
-		}
-		sp.Session.Emit("databaseID", &IDMessage{
-			TableID: t.ID,
-			ID:      g.ID,
-		})
+		sp.Session.NotifyNoteList(t, -1)
 	}
 
 	notifyAllTable(t)    // Update the spectator list for the row in the lobby

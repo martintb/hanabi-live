@@ -3,11 +3,9 @@ package main
 import (
 	"encoding/json"
 	"net"
-	"strconv"
 	"strings"
 	"time"
 
-	sentry "github.com/getsentry/sentry-go"
 	melody "gopkg.in/olahol/melody.v1"
 )
 
@@ -28,9 +26,15 @@ const (
 //   tableJoin {"gameID":1}
 //   action {"target":1,"type":2}
 func websocketMessage(ms *melody.Session, msg []byte) {
-	// Lock the command mutex for the duration of the function to ensure synchronous execution
-	commandMutex.Lock()
-	defer commandMutex.Unlock()
+	// If the server is shutting down, ignore all incoming message from users
+	if blockAllIncomingMessages.IsSet() {
+		return
+	}
+
+	// Keep track of the number of ongoing executing commands
+	// https://gobyexample.com/waitgroups
+	commandWaitGroup.Add(1)
+	defer commandWaitGroup.Done()
 
 	// Turn the Melody session into a custom session
 	s := &Session{ms}
@@ -63,26 +67,7 @@ func websocketMessage(ms *melody.Session, msg []byte) {
 		s.Set("rateLimitAllowance", newRateLimitAllowance)
 	}
 
-	if usingSentry {
-		// Parse the IP address
-		var ip string
-		if v, _, err := net.SplitHostPort(s.Session.Request.RemoteAddr); err != nil {
-			logger.Error("Failed to parse the IP address in the WebSocket function:", err)
-			return
-		} else {
-			ip = v
-		}
-
-		// If we encounter an error later on, we want metadata to be attached to the error message,
-		// which can be helpful for debugging (since we can ask the user how they caused the error)
-		// We use "SetTags()" instead of "SetUser()" since tags are more easy to see in the
-		// Sentry GUI than users
-		sentry.ConfigureScope(func(scope *sentry.Scope) {
-			scope.SetTag("userID", strconv.Itoa(s.UserID()))
-			scope.SetTag("username", s.Username())
-			scope.SetTag("ip", ip)
-		})
-	}
+	sentryWebsocketMessageAttachMetadata(s)
 
 	// Unpack the message to see what kind of command it is
 	// (this code is taken from Golem)
@@ -90,7 +75,7 @@ func websocketMessage(ms *melody.Session, msg []byte) {
 	// We use SplitN() with a value of 2 instead of Split() so that if there is a space in the JSON,
 	// the data part of the splice doesn't get messed up
 	if len(result) != 2 {
-		logger.Error("User \"" + s.Username() + "\" sent an invalid WebSocket message.")
+		logger.Error("User \"" + s.Username() + "\" sent an invalid WebSocket message (with no data attached to the command).")
 		return
 	}
 	command := result[0]

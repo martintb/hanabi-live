@@ -2,7 +2,6 @@ package main
 
 import (
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -16,7 +15,7 @@ func actionsFunctionsInit() {
 		ActionTypeDiscard:   commandActionDiscard,
 		ActionTypeColorClue: commandActionClue,
 		ActionTypeRankClue:  commandActionClue,
-		ActionTypeGameOver:  commandActionGameOver,
+		ActionTypeEndGame:   commandActionEndGame,
 	}
 }
 
@@ -28,8 +27,8 @@ func actionsFunctionsInit() {
 //   // Corresponds to "actionType" in "constants.go"
 //   type: 0,
 //   // If a play or a discard, corresponds to the order of the the card that was played/discarded
-//   // If a clue, correponds to the index of the player that received the clue
-//   // If a game over, correponds to the index of the player that caused the game to end
+//   // If a clue, corresponds to the index of the player that received the clue
+//   // If a game over, corresponds to the index of the player that caused the game to end
 //   target: 1,
 //   // Optional; only present if a clue
 //   // If a color clue, then 0 if red, 1 if yellow, etc.
@@ -38,24 +37,18 @@ func actionsFunctionsInit() {
 //   value: 0,
 // }
 func commandAction(s *Session, d *CommandData) {
-	/*
-		Validate
-	*/
-
-	// Validate that the table exists
-	tableID := d.TableID
-	var t *Table
-	if v, ok := tables[tableID]; !ok {
-		s.Warning("Table " + strconv.Itoa(tableID) + " does not exist.")
+	t, exists := getTableAndLock(s, d.TableID, !d.NoLock)
+	if !exists {
 		return
-	} else {
-		t = v
+	}
+	if !d.NoLock {
+		defer t.Mutex.Unlock()
 	}
 	g := t.Game
 
 	// Validate that the game has started
 	if !t.Running {
-		s.Warning(ChatCommandNotStartedFail)
+		s.Warning(NotStartedFail)
 		return
 	}
 
@@ -67,53 +60,50 @@ func commandAction(s *Session, d *CommandData) {
 	}
 
 	// Validate that they are in the game
-	i := t.GetPlayerIndexFromID(s.UserID())
-	if i == -1 {
-		s.Warning("You are not playing at table " + strconv.Itoa(tableID) + ", " +
+	playerIndex := t.GetPlayerIndexFromID(s.UserID())
+	if playerIndex == -1 {
+		s.Warning("You are not playing at table " + strconv.FormatUint(t.ID, 10) + ", " +
 			"so you cannot send an action.")
 		return
 	}
+	p := g.Players[playerIndex]
 
-	// Validate that it is this player's turn
-	if g.ActivePlayer != i && d.Type != ActionTypeGameOver {
-		s.Warning("It is not your turn, so you cannot perform an action.")
-		g.InvalidActionOccurred = true
-		return
+	if d.Type != ActionTypeEndGame {
+		// Validate that it is this player's turn
+		if g.ActivePlayerIndex != playerIndex {
+			s.Warning("It is not your turn, so you cannot perform an action.")
+			g.InvalidActionOccurred = true
+			return
+		}
+
+		// Validate that the game is not paused
+		if g.Paused {
+			s.Warning("You cannot perform a game action when the game is paused.")
+			g.InvalidActionOccurred = true
+			return
+		}
+
+		// Validate that a player is not doing an illegal action for their character
+		if characterValidateAction(s, d, g, p) {
+			g.InvalidActionOccurred = true
+			return
+		}
+		if characterValidateSecondAction(s, d, g, p) {
+			g.InvalidActionOccurred = true
+			return
+		}
 	}
 
-	// Validate that the game is not paused
-	if g.Paused {
-		s.Warning("You cannot perform a game action when the game is paused.")
-		g.InvalidActionOccurred = true
-		return
-	}
+	action(s, d, t, p)
+}
 
+func action(s *Session, d *CommandData, t *Table, p *GamePlayer) {
 	// Local variables
-	p := g.Players[i]
-
-	// Validate that a player is not doing an illegal action for their character
-	if characterValidateAction(s, d, g, p) {
-		g.InvalidActionOccurred = true
-		return
-	}
-	if characterValidateSecondAction(s, d, g, p) {
-		g.InvalidActionOccurred = true
-		return
-	}
-
-	/*
-		Action
-	*/
-
-	// Remove the double discard state
-	g.DoubleDiscard = false
-
-	// Remove the "fail#" and "blind#" states
-	g.Sound = ""
+	g := t.Game
 
 	// Start the idle timeout
 	// (but don't update the idle variable if we are ending the game)
-	if d.Type != ActionTypeGameOver {
+	if d.Type != ActionTypeEndGame {
 		go t.CheckIdle()
 	}
 
@@ -137,7 +127,7 @@ func commandAction(s *Session, d *CommandData) {
 	// Adjust the timer for the player that just took their turn
 	// (if the game is over now due to a player running out of time, we don't need to adjust the
 	// timer because we already set it to 0 in the "checkTimer" function)
-	if d.Type != ActionTypeGameOver {
+	if d.Type != ActionTypeEndGame {
 		p.Time -= time.Since(g.DatetimeTurnBegin)
 		// (in non-timed games,
 		// "Time" will decrement into negative numbers to show how much time they are taking)
@@ -152,7 +142,10 @@ func commandAction(s *Session, d *CommandData) {
 
 	// If a player has just taken their final turn,
 	// mark all of the cards in their hand as not able to be played
-	if g.EndTurn != -1 && g.EndTurn != g.Turn+len(g.Players)+1 {
+	// (but don't do this if we are in an end game that has a custom amount of turns)
+	if g.EndTurn != -1 &&
+		g.EndTurn != g.Turn+len(g.Players)+1 {
+
 		for _, c := range p.Hand {
 			c.CannotBePlayed = true
 		}
@@ -166,13 +159,13 @@ func commandAction(s *Session, d *CommandData) {
 			// In Golang, "%" will give the remainder and not the modulus,
 			// so we need to ensure that the result is not negative or we will get a
 			// "index out of range" error
-			g.ActivePlayer += len(g.Players)
-			g.ActivePlayer = (g.ActivePlayer - 1) % len(g.Players)
+			g.ActivePlayerIndex += len(g.Players)
+			g.ActivePlayerIndex = (g.ActivePlayerIndex - 1) % len(g.Players)
 		} else {
-			g.ActivePlayer = (g.ActivePlayer + 1) % len(g.Players)
+			g.ActivePlayerIndex = (g.ActivePlayerIndex + 1) % len(g.Players)
 		}
 	}
-	np := g.Players[g.ActivePlayer] // The next player
+	np := g.Players[g.ActivePlayerIndex] // The next player
 	nps := t.Players[np.Index].Session
 
 	// Check for character-related softlocks
@@ -181,63 +174,40 @@ func commandAction(s *Session, d *CommandData) {
 
 	// Check for end game states
 	if g.CheckEnd() {
-		var text string
-		if g.EndCondition > EndConditionNormal {
-			text = "Players lose!"
-		} else {
-			text = "Players score " + strconv.Itoa(g.Score) + " points."
-		}
-		g.Actions = append(g.Actions, ActionText{
-			Type: "text",
-			Text: text,
+		// Append a game over action
+		g.Actions = append(g.Actions, ActionGameOver{
+			Type:         "gameOver",
+			EndCondition: g.EndCondition,
+			PlayerIndex:  g.EndPlayer,
 		})
 		t.NotifyGameAction()
-		logger.Info(t.GetName() + " " + text)
 	}
 
 	// Send the new turn
-	// This must be below the end-game text (e.g. "Players lose!"),
-	// so that it is combined with the final action
 	t.NotifyTurn()
 
 	if g.EndCondition == EndConditionInProgress {
-		logger.Info(t.GetName() + " It is now " + np.Name + "'s turn.")
-	} else if g.EndCondition == EndConditionNormal {
-		if g.Score == variants[g.Options.Variant].MaxScore {
-			g.Sound = "finished_perfect"
-		} else {
-			// The players did got get a perfect score, but they did not strike out either
-			g.Sound = "finished_success"
-		}
-	} else if g.EndCondition > EndConditionNormal {
-		g.Sound = "finished_fail"
-	}
-
-	// Tell every client to play a sound as a notification for the action taken
-	t.NotifySound()
-
-	if g.EndCondition > EndConditionInProgress {
+		logger.Info(t.GetName() + "It is now " + np.Name + "'s turn.")
+	} else {
 		g.End()
 		return
 	}
 
-	// Send the "yourTurn" message to the next player
-	nps.NotifyYourTurn(t)
-
 	// Send everyone new clock values
 	t.NotifyTime()
 
-	if t.Options.Timed {
+	if t.Options.Timed && !t.ExtraOptions.NoWriteToDatabase {
 		// Start the function that will check to see if the current player has run out of time
 		// (since it just got to be their turn)
 		go g.CheckTimer(g.Turn, g.PauseCount, np)
 
-		// If the player queued a pause command, then pause the game
+		// If the next player queued a pause command, then pause the game
 		if np.RequestedPause {
 			np.RequestedPause = false
-			commandPause(nps, &CommandData{
+			commandPause(nps, &CommandData{ // Manual invocation
 				TableID: t.ID,
 				Setting: "pause",
+				NoLock:  true,
 			})
 		}
 	}
@@ -267,13 +237,16 @@ func commandActionPlay(s *Session, d *CommandData, g *Game, p *GamePlayer) bool 
 	}
 
 	c := p.RemoveCard(d.Target)
-	g.DoubleDiscard = p.PlayCard(c)
+	p.PlayCard(c)
 	p.DrawCard()
 
 	return true
 }
 
 func commandActionDiscard(s *Session, d *CommandData, g *Game, p *GamePlayer) bool {
+	// Local variables
+	variant := variants[g.Options.VariantName]
+
 	// Validate that the card is in their hand
 	if !p.InHand(d.Target) {
 		s.Warning("You cannot play a card that is not in your hand.")
@@ -282,12 +255,7 @@ func commandActionDiscard(s *Session, d *CommandData, g *Game, p *GamePlayer) bo
 	}
 
 	// Validate that the team is not at the maximum amount of clues
-	// (the client should enforce this, but do a check just in case)
-	clueLimit := MaxClueNum
-	if strings.HasPrefix(g.Options.Variant, "Clue Starved") {
-		clueLimit *= 2
-	}
-	if g.ClueTokens == clueLimit {
+	if variant.AtMaxClueTokens(g.ClueTokens) {
 		s.Warning("You cannot discard while the team has " + strconv.Itoa(MaxClueNum) + " clues.")
 		g.InvalidActionOccurred = true
 		return false
@@ -301,20 +269,16 @@ func commandActionDiscard(s *Session, d *CommandData, g *Game, p *GamePlayer) bo
 
 	g.ClueTokens++
 	c := p.RemoveCard(d.Target)
-	g.DoubleDiscard = p.DiscardCard(c)
-	characterShuffle(g, p)
+	p.DiscardCard(c)
 	p.DrawCard()
-
-	// Mark that the blind-play streak has ended
-	g.BlindPlays = 0
-
-	// Mark that the misplay streak has ended
-	g.Misplays = 0
 
 	return true
 }
 
 func commandActionClue(s *Session, d *CommandData, g *Game, p *GamePlayer) bool {
+	// Local variables
+	variant := variants[g.Options.VariantName]
+
 	// Validate that the target of the clue is sane
 	if d.Target < 0 || d.Target > len(g.Players)-1 {
 		s.Warning("That is an invalid clue target.")
@@ -323,20 +287,15 @@ func commandActionClue(s *Session, d *CommandData, g *Game, p *GamePlayer) bool 
 	}
 
 	// Validate that the player is not giving a clue to themselves
-	if g.ActivePlayer == d.Target {
+	if g.ActivePlayerIndex == d.Target {
 		s.Warning("You cannot give a clue to yourself.")
 		g.InvalidActionOccurred = true
 		return false
 	}
 
 	// Validate that there are clues available to use
-	if g.ClueTokens == 0 {
-		s.Warning("You cannot give a clue when the team has 0 clues left.")
-		g.InvalidActionOccurred = true
-		return false
-	}
-	if strings.HasPrefix(g.Options.Variant, "Clue Starved") && g.ClueTokens == 1 {
-		s.Warning("You cannot give a clue when the team only has 0.5 clues.")
+	if g.ClueTokens < variant.GetAdjustedClueTokens(1) {
+		s.Warning("You need at least 1 clue token available in order to give a clue.")
 		g.InvalidActionOccurred = true
 		return false
 	}
@@ -346,14 +305,14 @@ func commandActionClue(s *Session, d *CommandData, g *Game, p *GamePlayer) bool 
 
 	// Validate the clue value
 	if clue.Type == ClueTypeColor {
-		if clue.Value < 0 || clue.Value > len(variants[g.Options.Variant].ClueColors)-1 {
+		if clue.Value < 0 || clue.Value > len(variant.ClueColors)-1 {
 			s.Warning("You cannot give a color clue with a value of " +
 				"\"" + strconv.Itoa(clue.Value) + "\".")
 			g.InvalidActionOccurred = true
 			return false
 		}
 	} else if clue.Type == ClueTypeRank {
-		if !intInSlice(clue.Value, variants[g.Options.Variant].ClueRanks) {
+		if !intInSlice(clue.Value, variant.ClueRanks) {
 			s.Warning("You cannot give a rank clue with a value of " +
 				"\"" + strconv.Itoa(clue.Value) + "\".")
 			g.InvalidActionOccurred = true
@@ -366,9 +325,7 @@ func commandActionClue(s *Session, d *CommandData, g *Game, p *GamePlayer) bool 
 	}
 
 	// Validate special variant restrictions
-	if strings.HasPrefix(g.Options.Variant, "Alternating Clues") &&
-		clue.Type == g.LastClueTypeGiven {
-
+	if variant.IsAlternatingClues() && clue.Type == g.LastClueTypeGiven {
 		s.Warning("You cannot give two clues of the same time in a row in this variant.")
 		g.InvalidActionOccurred = true
 		return false
@@ -384,7 +341,12 @@ func commandActionClue(s *Session, d *CommandData, g *Game, p *GamePlayer) bool 
 	p2 := g.Players[d.Target] // The target of the clue
 	touchedAtLeastOneCard := false
 	for _, c := range p2.Hand {
-		if variantIsCardTouched(g.Options.Variant, clue, c) {
+		// Prevent characters from cluing cards that they are not supposed to see
+		if !characterSeesCard(g, p, p2, c.Order) {
+			continue
+		}
+
+		if variantIsCardTouched(g.Options.VariantName, clue, c) {
 			touchedAtLeastOneCard = true
 			break
 		}
@@ -393,11 +355,9 @@ func commandActionClue(s *Session, d *CommandData, g *Game, p *GamePlayer) bool 
 		// Make an exception if they have the optional setting for "Empty Clues" turned on
 		!g.Options.EmptyClues &&
 		// Make an exception for variants where color clues are always allowed
-		(!variants[g.Options.Variant].ColorCluesTouchNothing || clue.Type != ClueTypeColor) &&
+		(!variant.ColorCluesTouchNothing || clue.Type != ClueTypeColor) &&
 		// Make an exception for variants where rank clues are always allowed
-		(!variants[g.Options.Variant].RankCluesTouchNothing || clue.Type != ClueTypeRank) &&
-		// Make an exception for certain characters
-		!characterEmptyClueAllowed(d, g, p) {
+		(!variant.RankCluesTouchNothing || clue.Type != ClueTypeRank) {
 
 		s.Warning("You cannot give a clue that touches 0 cards in the hand.")
 		g.InvalidActionOccurred = true
@@ -406,46 +366,52 @@ func commandActionClue(s *Session, d *CommandData, g *Game, p *GamePlayer) bool 
 
 	p.GiveClue(d)
 
-	// Mark that the blind-play streak has ended
-	g.BlindPlays = 0
-
-	// Mark that the misplay streak has ended
-	g.Misplays = 0
-
 	return true
 }
 
-func commandActionGameOver(s *Session, d *CommandData, g *Game, p *GamePlayer) bool {
-	// Local variables
-	t := g.Table
-
-	// A "gameOver" action is a special action type sent by the server to itself when it needs to
-	// end an ongoing game
+func commandActionEndGame(s *Session, d *CommandData, g *Game, p *GamePlayer) bool {
+	// An "endGame" action is a special action type sent by the server to itself
 	// The value will correspond to the end condition (see "endCondition" in "constants.go")
+	// The target will correspond to the index of the player who ended the game
+
 	// Validate the value
 	if d.Value != EndConditionTimeout &&
+		d.Value != EndConditionTerminated &&
 		d.Value != EndConditionIdleTimeout {
 
-		s.Warning("That is not a valid value for the game over action.")
+		s.Warning("That is not a valid value for the end game action.")
 		g.InvalidActionOccurred = true
 		return false
 	}
 
-	g.Strikes = 3
+	// Mark that the game should be ended
 	g.EndCondition = d.Value
-	g.EndPlayer = g.ActivePlayer
+	g.EndPlayer = d.Target
 
-	var text string
-	if d.Value == EndConditionTimeout {
-		text = p.Name + " ran out of time!"
-	} else if d.Value == EndConditionIdleTimeout {
-		text = "Players were idle for too long."
+	// Insert an "end game" action
+	var endGameAction *GameAction
+	if g.EndCondition == EndConditionTimeout {
+		endGameAction = &GameAction{
+			Type:   ActionTypeEndGame,
+			Target: g.EndPlayer,
+			Value:  EndConditionTimeout,
+		}
+	} else if g.EndCondition == EndConditionTerminated {
+		endGameAction = &GameAction{
+			Type:   ActionTypeEndGame,
+			Target: g.EndPlayer,
+			Value:  EndConditionTerminated,
+		}
+	} else if g.EndCondition == EndConditionIdleTimeout {
+		endGameAction = &GameAction{
+			Type:   ActionTypeEndGame,
+			Target: -1,
+			Value:  EndConditionIdleTimeout,
+		}
 	}
-	g.Actions = append(g.Actions, ActionText{
-		Type: "text",
-		Text: text,
-	})
-	t.NotifyGameAction()
+	if endGameAction != nil {
+		g.Actions2 = append(g.Actions2, endGameAction)
+	}
 
 	return true
 }

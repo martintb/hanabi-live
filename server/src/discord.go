@@ -12,11 +12,11 @@ import (
 var (
 	discord               *discordgo.Session
 	discordToken          string
+	discordGuildID        string
 	discordListenChannels []string
 	discordLobbyChannel   string
 	discordLastAtHere     time.Time
 	discordBotID          string
-	discordGuildID        string
 )
 
 /*
@@ -29,6 +29,12 @@ func discordInit() {
 	discordToken = os.Getenv("DISCORD_TOKEN")
 	if len(discordToken) == 0 {
 		logger.Info("The \"DISCORD_TOKEN\" environment variable is blank; " +
+			"aborting Discord initialization.")
+		return
+	}
+	discordGuildID = os.Getenv("DISCORD_GUILD_ID")
+	if len(discordGuildID) == 0 {
+		logger.Info("The \"DISCORD_GUILD_ID\" environment variable is blank; " +
 			"aborting Discord initialization.")
 		return
 	}
@@ -84,30 +90,11 @@ func discordConnect() {
 		return
 	}
 
-	// We want to periodically update the members of the guild, so we do this in a new goroutine
-	go discordRefreshMembers()
-
 	// Announce that the server has started
-	commandChat(nil, &CommandData{
-		Msg:    "The server has successfully started at: " + getCurrentTimestamp(),
-		Room:   "lobby",
-		Server: true,
-	})
-}
-
-func discordRefreshMembers() {
-	// An infinite loop
-	for {
-		// Request all of the guild members,
-		// as large servers will only have the first 100 or so cached in "guild.Members" by default
-		// This updates the state in the background
-		if err := discord.RequestGuildMembers(discordGuildID, "", 0); err != nil {
-			// This can occasionally fail, so we don't want to report the error to Sentry
-			logger.Info("Failed to request the Discord guild members:", err)
-		}
-
-		time.Sleep(5 * time.Minute)
-	}
+	// (we wait for Discord to connect before displaying this message)
+	msg := "The server has successfully started at: " + getCurrentTimestamp() + "\n"
+	msg += "(" + gitCommitOnStart + ")"
+	chatServerSend(msg, "lobby")
 }
 
 /*
@@ -117,9 +104,6 @@ func discordRefreshMembers() {
 func discordReady(s *discordgo.Session, event *discordgo.Ready) {
 	logger.Info("Discord bot connected with username: " + event.User.Username)
 	discordBotID = event.User.ID
-
-	// Assume that the first channel ID is the same as the guild/server ID
-	discordGuildID = discordListenChannels[0]
 }
 
 // Copy messages from Discord to the lobby
@@ -143,8 +127,7 @@ func discordMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
-	// We want to replicate Discord messages to the Hanabi Live lobby,
-	// but only from specific channels
+	// We want to replicate Discord messages to the lobby, but only from specific channels
 	if !stringInSlice(m.ChannelID, discordListenChannels) {
 		// Handle specific commands in non-listening channels
 		// (to replicate lobby functionality to the Discord server more generally)
@@ -154,9 +137,7 @@ func discordMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 
 	// Send everyone the notification
-	commandMutex.Lock()
-	defer commandMutex.Unlock()
-	commandChat(nil, &CommandData{
+	commandChat(nil, &CommandData{ // Manual invocation
 		Username: discordGetNickname(m.Author.ID),
 		Msg:      m.Content,
 		Discord:  true,
@@ -165,6 +146,7 @@ func discordMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		DiscordID: m.Author.ID,
 		// Pass through the discriminator so we can append it to the username
 		DiscordDiscriminator: m.Author.Discriminator,
+		NoLock:               true,
 	})
 }
 
@@ -194,86 +176,27 @@ func discordSend(to string, username string, msg string) {
 }
 
 func discordGetNickname(discordID string) string {
-	// Assume that the first channel ID is the same as the guild/server ID
-	guildID := discordListenChannels[0]
-
-	// Get the Discord guild object
-	var guild *discordgo.Guild
-	if v, err := discord.Guild(guildID); err != nil {
+	if member, err := discord.GuildMember(discordGuildID, discordID); err != nil {
 		// This can occasionally fail, so we don't want to report the error to Sentry
-		logger.Info("Failed to get the Discord guild:", err)
+		logger.Info("Failed to get the Discord guild member:", err)
 		return "[error]"
 	} else {
-		guild = v
-	}
-
-	// Get their custom nickname for the Discord server, if any
-	for _, member := range guild.Members {
-		if member.User.ID != discordID {
-			continue
+		if member.Nick != "" {
+			return member.Nick
 		}
 
-		if member.Nick == "" {
-			return member.User.Username
-		}
-
-		return member.Nick
-	}
-
-	// If the "RequestGuildMembers()" function has not finished populating the "guild.Members",
-	// then the above code block may not find the user
-	// Default to getting the user's username directly from the API
-	// This can occasionally fail, so we don't want to report the error to Sentry
-	if user, err := discord.User(discordID); err != nil {
-		logger.Info("Failed to get the Discord user of \""+discordID+"\":", err)
-		return "[error]"
-	} else {
-		return user.Username
+		return member.User.Username
 	}
 }
 
 func discordGetChannel(discordID string) string {
-	// Get the Discord guild object
-	var guild *discordgo.Guild
-	if v, err := discord.Guild(discordListenChannels[0]); err != nil {
+	if channel, err := discord.Channel(discordID); err != nil {
 		// This can occasionally fail, so we don't want to report the error to Sentry
-		logger.Info("Failed to get the Discord guild:", err)
-		return ""
+		logger.Info("Failed to get the Discord channel:", err)
+		return "[error]"
 	} else {
-		guild = v
+		return channel.Name
 	}
-	// (assume that the first channel ID is the same as the server ID)
-
-	// Get the name of the channel
-	for _, channel := range guild.Channels {
-		if channel.ID == discordID {
-			return channel.Name
-		}
-	}
-
-	return "[unknown]"
-}
-
-func discordGetID(username string) string {
-	// Get the Discord guild object
-	var guild *discordgo.Guild
-	if v, err := discord.Guild(discordListenChannels[0]); err != nil {
-		// This can occasionally fail, so we don't want to report the error to Sentry
-		logger.Info("Failed to get the Discord guild:", err)
-		return ""
-	} else {
-		guild = v
-	}
-	// (assume that the first channel ID is the same as the server ID)
-
-	// Find the ID that corresponds to this username
-	for _, member := range guild.Members {
-		if member.Nick == username || member.User.Username == username {
-			return member.User.ID
-		}
-	}
-
-	return ""
 }
 
 // We need to check for special commands that occur in Discord channels other than #general
@@ -323,7 +246,7 @@ func discordCheckCommand(m *discordgo.MessageCreate) {
 		// We enclose the link in "<>" to prevent Discord from generating a link preview
 		if len(args) == 0 {
 			// They specified an ID but not a turn
-			msg := "<https://hanabi.live/replay/" + strconv.Itoa(id) + ">"
+			msg := "<https://" + domain + "/replay/" + strconv.Itoa(id) + ">"
 			discordSend(m.ChannelID, "", msg)
 			return
 		}
@@ -345,7 +268,18 @@ func discordCheckCommand(m *discordgo.MessageCreate) {
 		}
 
 		// They specified an ID and a turn
-		msg := "<https://hanabi.live/replay/" + strconv.Itoa(id) + "/" + strconv.Itoa(turn) + ">"
+		msg := "<https://" + domain + "/replay/" + strconv.Itoa(id) + "/" + strconv.Itoa(turn) + ">"
+		discordSend(m.ChannelID, "", msg)
+		return
+	}
+
+	// -------------
+	// Info commands
+	// -------------
+
+	if command == "2pquestion" || command == "2player" || command == "2p" {
+		// This includes a discord link to the #2-player channel
+		msg := "Ask questions about 2-player games in the <#712153960709881888> channel."
 		discordSend(m.ChannelID, "", msg)
 		return
 	}
@@ -356,8 +290,15 @@ func discordCheckCommand(m *discordgo.MessageCreate) {
 		return
 	}
 
-	if command == "2pquestion" {
-		msg := "Ask questions about 2-player games in the #2-player channel."
+	if command == "oop" {
+		msg := "It looks like you are asking a question about an *Out-of-Position Bluff* (or OOP for short). When asking such questions, **you must include** the condition that you think is satisfied (i, ii, or iii)."
+		discordSend(m.ChannelID, "", msg)
+		return
+	}
+
+	if command == "undefined" {
+		msg := "**Why isn't [situation X] defined in the conventions document?**\n\n"
+		msg += "Not everything has to have a meaning. We intentionally want to have situations be undefined so that we have some wiggle room to handle a wide variety of game states: <https://github.com/Zamiell/hanabi-conventions/blob/master/misc/Convention_Goals.md>"
 		discordSend(m.ChannelID, "", msg)
 		return
 	}

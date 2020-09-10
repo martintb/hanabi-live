@@ -27,7 +27,7 @@ func httpTag(c *gin.Context) {
 
 	// Get the game IDs that match this tag
 	var gameIDs []int
-	if v, err := models.GameTags.Search(tag); err != nil {
+	if v, err := models.GameTags.SearchByTag(tag); err != nil {
 		logger.Error("Failed to search for games matching a tag of \""+tag+"\":", err)
 		http.Error(
 			w,
@@ -53,9 +53,8 @@ func httpTag(c *gin.Context) {
 		gameHistoryList = v
 	}
 
-	data := HistoryData{
+	data := TemplateData{
 		Title:      "History",
-		Dev:        false,
 		NamesTitle: "Games With a Tag of: " + tag,
 		History:    gameHistoryList,
 	}

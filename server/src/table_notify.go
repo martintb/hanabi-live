@@ -22,14 +22,14 @@ func (t *Table) NotifyChatTyping(name string, typing bool) {
 	if !t.Replay {
 		for _, p := range t.Players {
 			if p.Present && p.Name != name { // We do not need to alert the person who is typing
-				p.Session.NotifyChatTyping(name, typing)
+				p.Session.NotifyChatTyping(t, name, typing)
 			}
 		}
 	}
 
 	for _, sp := range t.Spectators {
 		if sp.Name != name { // We do not need to alert the person who is typing
-			sp.Session.NotifyChatTyping(name, typing)
+			sp.Session.NotifyChatTyping(t, name, typing)
 		}
 	}
 }
@@ -73,6 +73,7 @@ func (t *Table) NotifyPlayerChange() {
 
 		// Second, send information about the game and the players in one big message
 		type GameMessage struct {
+			TableID           uint64               `json:"tableID"`
 			Name              string               `json:"name"`
 			Owner             int                  `json:"owner"`
 			Players           []*GamePlayerMessage `json:"players"`
@@ -80,6 +81,7 @@ func (t *Table) NotifyPlayerChange() {
 			PasswordProtected bool                 `json:"passwordProtected"`
 		}
 		p.Session.Emit("game", &GameMessage{
+			TableID:           t.ID,
 			Name:              t.Name,
 			Owner:             t.Owner,
 			Players:           gamePlayers,
@@ -102,13 +104,14 @@ func (t *Table) NotifyConnected() {
 		return
 	}
 
-	for _, p := range t.Players {
-		if p.Present {
-			p.Session.NotifyConnected(t)
+	if !t.Replay {
+		for _, p := range t.Players {
+			if p.Present {
+				p.Session.NotifyConnected(t)
+			}
 		}
 	}
 
-	// Also send the spectators an update
 	for _, sp := range t.Spectators {
 		sp.Session.NotifyConnected(t)
 	}
@@ -134,55 +137,6 @@ func (t *Table) NotifySpectators() {
 	}
 }
 
-// NotifyStatus appends a new "status" action and alerts everyone
-func (t *Table) NotifyStatus() {
-	g := t.Game
-	g.Actions = append(g.Actions, ActionStatus{
-		Type:          "status",
-		Clues:         g.ClueTokens,
-		Score:         g.Score,
-		MaxScore:      g.MaxScore,
-		DoubleDiscard: g.DoubleDiscard,
-	})
-	t.NotifyGameAction()
-
-	// Also send updates on stack directions
-	t.NotifyStackDirections()
-}
-
-func (t *Table) NotifyStackDirections() {
-	g := t.Game
-
-	// If we are playing a "Reversed" or "Up or Down" variant, we also need to send the stack directions
-	if variants[g.Options.Variant].HasReversedSuits() {
-		// Since StackDirections is a slice, it will be stored as a pointer
-		// (unlike the primitive values that we used for the ActionStatus message above)
-		// So, make a copy to preserve the stack directions for this exact moment in time
-		stackDirections := make([]int, len(g.StackDirections))
-		copy(stackDirections, g.StackDirections)
-		g.Actions = append(g.Actions, ActionStackDirections{
-			Type:       "stackDirections",
-			Directions: stackDirections,
-		})
-		t.NotifyGameAction()
-	}
-}
-
-// NotifyTurn appends a new "turn" action and alerts everyone
-func (t *Table) NotifyTurn() {
-	g := t.Game
-	who := g.ActivePlayer
-	if g.EndCondition > EndConditionInProgress {
-		who = -1
-	}
-	g.Actions = append(g.Actions, ActionTurn{
-		Type: "turn",
-		Num:  g.Turn,
-		Who:  who,
-	})
-	t.NotifyGameAction()
-}
-
 // NotifyGameAction sends the people in the game an update about the new action
 func (t *Table) NotifyGameAction() {
 	g := t.Game
@@ -199,39 +153,64 @@ func (t *Table) NotifyGameAction() {
 	for _, gp := range g.Players {
 		p := t.Players[gp.Index]
 		if p.Present {
-			p.Session.NotifyGameAction(a, t)
+			p.Session.NotifyGameAction(t, a)
 		}
 	}
 
 	// Also send the spectators an update
 	for _, sp := range t.Spectators {
-		sp.Session.NotifyGameAction(a, t)
+		sp.Session.NotifyGameAction(t, a)
 	}
 }
 
-// NotifySound sends a sound notification to everyone in the game
-// (signifying that an action just occurred)
-func (t *Table) NotifySound() {
-	for i, p := range t.Players {
-		if p.Present {
-			p.Session.NotifySound(t, i)
-		}
+// NotifyStatus appends a new "status" action and alerts everyone
+func (t *Table) NotifyStatus() {
+	g := t.Game
+	g.Actions = append(g.Actions, ActionStatus{
+		Type:     "status",
+		Clues:    g.ClueTokens,
+		Score:    g.Score,
+		MaxScore: g.MaxScore,
+	})
+	t.NotifyGameAction()
+}
+
+// NotifyTurn appends a new "turn" action and alerts everyone
+func (t *Table) NotifyTurn() {
+	g := t.Game
+	currentPlayerIndex := g.ActivePlayerIndex
+	if g.EndCondition > EndConditionInProgress {
+		currentPlayerIndex = -1
+	}
+	g.Actions = append(g.Actions, ActionTurn{
+		Type:               "turn",
+		Num:                g.Turn,
+		CurrentPlayerIndex: currentPlayerIndex,
+	})
+	t.NotifyGameAction()
+}
+
+func (t *Table) NotifyFinishOngoingGame() {
+	type FinishOngoingGameMessage struct {
+		TableID            uint64 `json:"tableID"`
+		DatabaseID         int    `json:"databaseID"`
+		SharedReplayLeader string `json:"sharedReplayLeader"`
+	}
+	finishOngoingGameMessage := &FinishOngoingGameMessage{
+		TableID:            t.ID,
+		DatabaseID:         t.ExtraOptions.DatabaseID,
+		SharedReplayLeader: t.GetSharedReplayLeaderName(),
 	}
 
+	// At this point, all of the players will have been converted to spectators
 	for _, sp := range t.Spectators {
-		sp.Session.NotifySound(t, -1)
+		sp.Session.Emit("finishOngoingGame", finishOngoingGameMessage)
 	}
 }
 
-func (t *Table) NotifyGameOver() {
-	for _, p := range t.Players {
-		if p.Present {
-			p.Session.Emit("gameOver", nil)
-		}
-	}
-
+func (t *Table) NotifyCardIdentities() {
 	for _, sp := range t.Spectators {
-		sp.Session.Emit("gameOver", nil)
+		sp.Session.NotifyCardIdentities(t)
 	}
 }
 
@@ -259,38 +238,52 @@ func (t *Table) NotifyPause() {
 	}
 }
 
+func (t *Table) NotifyReplayLeader() {
+	for _, sp := range t.Spectators {
+		sp.Session.NotifyReplayLeader(t)
+	}
+}
+
 func (t *Table) NotifySpectatorsNote(order int) {
 	g := t.Game
 
-	// Make an array that contains the combined notes for all the players & spectators
-	// (for a specific card)
-	type Note struct {
-		Name string `json:"name"`
-		Note string `json:"note"`
-	}
-	notes := make([]Note, 0)
-	for _, p := range g.Players {
-		notes = append(notes, Note{
-			Name: p.Name,
-			Note: p.Notes[order],
-		})
-	}
 	for _, sp := range t.Spectators {
-		notes = append(notes, Note{
-			Name: sp.Name,
-			Note: sp.Notes[order],
-		})
-	}
+		// Make an array that contains the combined notes for all the players & spectators
+		// (for a specific card)
+		// However, if this spectator is shadowing a specific player, then only include the note for
+		// the shadowed player
+		type Note struct {
+			Name string `json:"name"`
+			Note string `json:"note"`
+		}
+		notes := make([]Note, 0)
+		for _, p := range g.Players {
+			if sp.ShadowingPlayerIndex == -1 || sp.ShadowingPlayerIndex == p.Index {
+				notes = append(notes, Note{
+					Name: p.Name,
+					Note: p.Notes[order],
+				})
+			}
+		}
+		if sp.ShadowingPlayerIndex == -1 {
+			for _, sp2 := range t.Spectators {
+				notes = append(notes, Note{
+					Name: sp2.Name,
+					Note: sp2.Notes[order],
+				})
+			}
+		}
 
-	type NoteMessage struct {
-		// The order of the card in the deck that these notes correspond to
-		Order int    `json:"order"`
-		Notes []Note `json:"notes"`
-	}
-	for _, sp := range t.Spectators {
+		type NoteMessage struct {
+			TableID uint64 `json:"tableID"`
+			// The order of the card in the deck that these notes correspond to
+			Order int    `json:"order"`
+			Notes []Note `json:"notes"`
+		}
 		sp.Session.Emit("note", &NoteMessage{
-			Order: order,
-			Notes: notes,
+			TableID: t.ID,
+			Order:   order,
+			Notes:   notes,
 		})
 	}
 }
@@ -317,12 +310,12 @@ func (t *Table) NotifyBoot() {
 	if !t.Replay {
 		for _, p := range t.Players {
 			if p.Present {
-				p.Session.Emit("boot", nil)
+				p.Session.NotifyBoot(t)
 			}
 		}
 	}
 
 	for _, sp := range t.Spectators {
-		sp.Session.Emit("boot", nil)
+		sp.Session.NotifyBoot(t)
 	}
 }

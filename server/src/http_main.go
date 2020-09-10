@@ -28,12 +28,18 @@ func httpMain(c *gin.Context) {
 		return
 	}
 
+	title := "Main"
+	path := c.Request.URL.Path
+	if strings.HasPrefix(path, "/dev") {
+		title = "Dev"
+	}
+
 	data := TemplateData{
-		Title:     "Main",
-		Domain:    domain,
-		Version:   getVersion(),
-		Compiling: compiling,
-		Dev:       strings.HasPrefix(c.FullPath(), "/dev"),
+		Title:       title,
+		Domain:      domain,
+		Version:     getVersion(),
+		Compiling:   compiling,
+		WebpackPort: webpackPort,
 	}
 	httpServeTemplate(w, data, "main")
 }

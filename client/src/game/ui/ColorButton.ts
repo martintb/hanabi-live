@@ -1,11 +1,10 @@
-// Imports
 import Konva from 'konva';
 import * as variantRules from '../rules/variant';
 import Clue from '../types/Clue';
 import Suit from '../types/Suit';
-import drawLayer from './drawLayer';
 import drawPip from './drawPip';
 import globals from './globals';
+import { drawLayer } from './konvaHelpers';
 
 export default class ColorButton extends Konva.Group {
   pressed: boolean = false;
@@ -31,6 +30,7 @@ export default class ColorButton extends Konva.Group {
       cornerRadius: 0.12 * h,
       fill: 'black',
       opacity: 0.6,
+      listening: true,
     });
     this.add(this.background);
 
@@ -58,7 +58,7 @@ export default class ColorButton extends Konva.Group {
           fontFamily: 'Verdana',
           fill: 'white',
           stroke: 'black',
-          strokeWidth: 1,
+          strokeWidth: 0.01487 * h,
           align: 'center',
           text: config.text as string | undefined,
           listening: false,

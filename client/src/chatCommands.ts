@@ -1,6 +1,7 @@
-// Imports
 import * as chat from './chat';
+import { VARIANTS } from './game/data/gameData';
 import globals from './globals';
+import * as createGame from './lobby/createGame';
 import * as modals from './modals';
 
 // Define a command handler map
@@ -9,7 +10,7 @@ const chatCommands = new Map<string, Callback>();
 export default chatCommands;
 
 // /friend [username]
-chatCommands.set('friend', (_room: string, args: string[]) => {
+const friend = (_room: string, args: string[]) => {
   // Validate that the format of the command is correct
   if (args.length < 1) {
     modals.warningShow('The format of the /friend command is: <code>/friend Alice</code>');
@@ -25,24 +26,19 @@ chatCommands.set('friend', (_room: string, args: string[]) => {
   globals.conn!.send('chatFriend', {
     name,
   });
-});
+};
+chatCommands.set('friend', friend);
+chatCommands.set('addfriend', friend);
 
 // /friends
 const friends = (room: string) => {
-  let friendsMsg;
+  let msg;
   if (globals.friends.length === 0) {
-    friendsMsg = 'Currently, you do not have any friends on your friends list.';
+    msg = 'Currently, you do not have any friends on your friends list.';
   } else {
-    friendsMsg = `Current friends: ${globals.friends.join(', ')}`;
+    msg = `Current friends: ${globals.friends.join(', ')}`;
   }
-  chat.add({
-    msg: friendsMsg,
-    who: '',
-    server: true,
-    datetime: new Date().getTime(),
-    room,
-    recipient: '', // This is needed to prevent the message from being viewed as a PM
-  }, false);
+  chat.addSelf(msg, room);
 };
 chatCommands.set('friends', friends);
 chatCommands.set('friendlist', friends);
@@ -65,7 +61,7 @@ const pm = (room: string, args: string[]) => {
     return;
   }
 
-  // Validate that the receipient is online
+  // Validate that the recipient is online
   let isOnline = false;
   for (const user of globals.userMap.values()) {
     if (user.name.toLowerCase() === recipient.toLowerCase()) {
@@ -92,6 +88,8 @@ chatCommands.set('pm', pm);
 chatCommands.set('w', pm);
 chatCommands.set('whisper', pm);
 chatCommands.set('msg', pm);
+chatCommands.set('tell', pm);
+chatCommands.set('t', pm);
 
 // /setleader [username]
 const setLeader = (_room: string, args: string[]) => {
@@ -120,13 +118,22 @@ const setVariant = (_room: string, args: string[]) => {
     return;
   }
 
-  const variant = args.join(' ');
+  // Validate the variant name
+  const variantName = args.join(' ');
+  if (VARIANTS.get(variantName) === undefined) {
+    modals.warningShow(`The variant of "${variantName}" is not valid.`);
+    return;
+  }
+
   globals.conn!.send('tableSetVariant', {
     tableID: globals.tableID,
     options: {
-      variant,
+      variantName,
     },
   });
+
+  // Update our stored create table setting to be equal to this variant
+  createGame.checkChanged('createTableVariant', variantName);
 };
 chatCommands.set('setvariant', setVariant);
 chatCommands.set('changevariant', setVariant);
@@ -169,25 +176,6 @@ chatCommands.set('tagsearch', (room: string, args: string[]) => {
   });
 });
 
-// /unfriend [username]
-chatCommands.set('unfriend', (_room: string, args: string[]) => {
-  // Validate that the format of the command is correct
-  if (args.length < 1) {
-    modals.warningShow('The format of the /unfriend command is: <code>/unfriend Alice</code>');
-    return;
-  }
-
-  // Validate that we are not targeting ourselves
-  const name = args.join(' ');
-  if (name.toLowerCase() === globals.username.toLowerCase()) {
-    modals.warningShow('You cannot unfriend yourself.');
-  }
-
-  globals.conn!.send('chatUnfriend', {
-    name,
-  });
-});
-
 // /playerinfo (username)
 const playerinfo = (_room: string, args: string[]) => {
   let usernames: string[] = [];
@@ -195,7 +183,7 @@ const playerinfo = (_room: string, args: string[]) => {
     // If there are no arguments and we are at a table
     // return stats for all the players
     if (globals.tableID !== -1 && globals.ui) {
-      usernames = globals.ui.globals.playerNames;
+      usernames = globals.ui.globals.metadata.playerNames;
     } else {
       // Otherwise, return stats for the caller
       usernames = [globals.username];
@@ -215,16 +203,29 @@ chatCommands.set('playerinfo', playerinfo);
 chatCommands.set('games', playerinfo);
 chatCommands.set('stats', playerinfo);
 
+// /unfriend [username]
+chatCommands.set('unfriend', (_room: string, args: string[]) => {
+  // Validate that the format of the command is correct
+  if (args.length < 1) {
+    modals.warningShow('The format of the /unfriend command is: <code>/unfriend Alice</code>');
+    return;
+  }
+
+  // Validate that we are not targeting ourselves
+  const name = args.join(' ');
+  if (name.toLowerCase() === globals.username.toLowerCase()) {
+    modals.warningShow('You cannot unfriend yourself.');
+  }
+
+  globals.conn!.send('chatUnfriend', {
+    name,
+  });
+});
+
 // /version
 chatCommands.set('version', (room: string) => {
-  chat.add({
-    msg: `You are running version <strong>${globals.version}</strong> of the Hanabi Live client.`,
-    who: '',
-    server: true,
-    datetime: new Date().getTime(),
-    room,
-    recipient: '', // This is needed to prevent the message from being viewed as a PM
-  }, false);
+  const msg = `You are running version <strong>${globals.version}</strong> of the client.`;
+  chat.addSelf(msg, room);
 });
 
 // /warning

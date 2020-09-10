@@ -5,10 +5,7 @@ package main
 
 import (
 	"math"
-	"regexp"
-	"sort"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -23,25 +20,20 @@ type GamePlayer struct {
 	Game *Game `json:"-"` // Skip circular references when encoding
 
 	// These relate to the game state
-	Hand               []*Card
-	Time               time.Duration
-	Notes              []string
-	RequestedPause     bool
-	Character          string
-	CharacterMetadata  int
-	CharacterMetadata2 int
-	Surprised          bool
+	Hand              []*Card
+	Time              time.Duration
+	Notes             []string
+	RequestedPause    bool
+	Character         string
+	CharacterMetadata int
 }
-
-var (
-	noteRegExp = regexp.MustCompile(`.*\|(.+)`)
-)
 
 // GiveClue returns false if the clue is illegal
 func (p *GamePlayer) GiveClue(d *CommandData) {
 	// Local variables
 	g := p.Game
 	t := g.Table
+	variant := variants[t.Options.VariantName]
 	clue := NewClue(d) // Convert the incoming data to a clue object
 
 	// Add the action to the action log
@@ -59,20 +51,14 @@ func (p *GamePlayer) GiveClue(d *CommandData) {
 	})
 
 	// Keep track that someone clued (i.e. doing 1 clue costs 1 "Clue Token")
-	g.ClueTokens--
-	if strings.HasPrefix(g.Options.Variant, "Clue Starved") {
-		// In the "Clue Starved" variants, you only get 0.5 clues per discard
-		// This is represented on the server by having each clue take two clues
-		// On the client, clues are shown to the user to be divided by two
-		g.ClueTokens--
-	}
+	g.ClueTokens -= variant.GetAdjustedClueTokens(1)
 	g.LastClueTypeGiven = clue.Type
 
 	// Apply the positive and negative clues to the cards in the hand
 	p2 := g.Players[d.Target] // The target of the clue
 	cardsTouched := make([]int, 0)
 	for _, c := range p2.Hand {
-		if variantIsCardTouched(g.Options.Variant, clue, c) {
+		if variantIsCardTouched(g.Options.VariantName, clue, c) {
 			c.Touched = true
 			cardsTouched = append(cardsTouched, c.Order)
 		}
@@ -87,67 +73,6 @@ func (p *GamePlayer) GiveClue(d *CommandData) {
 		Turn:   g.Turn,
 	})
 	t.NotifyGameAction()
-
-	// Send the "message" message about the clue
-	text := p.Name + " tells " + p2.Name + " about "
-	words := []string{
-		"zero",
-		"one",
-		"two",
-		"three",
-		"four",
-		"five",
-	}
-	text += words[len(cardsTouched)] + " "
-
-	if clue.Type == ClueTypeColor {
-		text += variants[g.Options.Variant].ClueColors[clue.Value]
-	} else if clue.Type == ClueTypeRank {
-		text += strconv.Itoa(clue.Value)
-	}
-	if len(cardsTouched) != 1 {
-		text += "s"
-	}
-
-	if strings.HasPrefix(g.Options.Variant, "Cow & Pig") ||
-		strings.HasPrefix(g.Options.Variant, "Duck") ||
-		p.Character == "Quacker" { // 34
-
-		// Create a list of slot numbers that correspond to the cards touched
-		slots := make([]string, 0)
-		for _, order := range cardsTouched {
-			slots = append(slots, strconv.Itoa(p2.GetCardSlot(order)))
-		}
-		sort.Strings(slots)
-
-		text = p.Name + " "
-		if strings.HasPrefix(g.Options.Variant, "Cow & Pig") {
-			if clue.Type == ClueTypeColor {
-				text += "moos"
-				g.Sound = "moo"
-			} else if clue.Type == ClueTypeRank {
-				text += "oinks"
-				g.Sound = "oink"
-			}
-		} else if strings.HasPrefix(g.Options.Variant, "Duck") ||
-			p.Character == "Quacker" { // 34
-
-			text += "quacks"
-			g.Sound = "quack"
-		}
-		text += " at " + p2.Name + "'"
-		if !strings.HasSuffix(p2.Name, "s") {
-			text += "s"
-		}
-		text += " slot " + strings.Join(slots, "/")
-	}
-
-	g.Actions = append(g.Actions, ActionText{
-		Type: "text",
-		Text: text,
-	})
-	t.NotifyGameAction()
-	logger.Info(t.GetName() + text)
 
 	// Do post-clue tasks
 	characterPostClue(d, g, p)
@@ -165,7 +90,7 @@ func (p *GamePlayer) RemoveCard(target int) *Card {
 	c := p.Hand[i]
 
 	// Mark what the "slot" number is
-	// e.g. slot 1 is the newest (left-most) card, which is index 5 (in a 3 player game)
+	// e.g. slot 1 is the newest (left-most) card, which is index 5 (in a 3-player game)
 	c.Slot = p.GetCardSlot(target)
 
 	// Remove it from the hand
@@ -176,12 +101,11 @@ func (p *GamePlayer) RemoveCard(target int) *Card {
 	return c
 }
 
-// PlayCard returns true if it is a "double discard" situation
-// (which can only occur if the card fails to play)
-func (p *GamePlayer) PlayCard(c *Card) bool {
+func (p *GamePlayer) PlayCard(c *Card) {
 	// Local variables
 	g := p.Game
 	t := g.Table
+	variant := variants[t.Options.VariantName]
 
 	// Add the action to the action log
 	// (in the future, we will delete GameActions and only keep track of GameActions2)
@@ -190,18 +114,13 @@ func (p *GamePlayer) PlayCard(c *Card) bool {
 		Target: c.Order,
 	})
 
-	// Check to see if revealing this card would surprise the player
-	// (we want to have it at the beginning of the function so that the fail sound will overwrite
-	// the surprise sound)
-	p.CheckSurprise(c)
-
 	// Find out if this successfully plays
 	var failed bool
-	if variants[g.Options.Variant].HasReversedSuits() {
+	if variant.HasReversedSuits() {
 		// In the "Up or Down" and "Reversed" variants, cards might not play in order
 		failed = variantReversiblePlay(g, c)
 	} else {
-		failed = c.Rank != g.Stacks[c.Suit]+1
+		failed = c.Rank != g.Stacks[c.SuitIndex]+1
 	}
 
 	// Handle "Detrimental Character Assignment" restrictions
@@ -214,32 +133,6 @@ func (p *GamePlayer) PlayCard(c *Card) bool {
 		c.Failed = true
 		g.Strikes++
 
-		if strings.HasPrefix(g.Options.Variant, "Throw It in a Hole") {
-			// Pretend like this card successfully played
-			if c.Touched {
-				// Mark that the blind-play streak has ended
-				g.BlindPlays = 0
-			} else {
-				g.BlindPlays++
-				if g.BlindPlays > 4 {
-					// There is no sound effect for more than 4 blind plays in a row
-					g.BlindPlays = 4
-				}
-				g.Sound = "blind" + strconv.Itoa(g.BlindPlays)
-			}
-		} else {
-			// Mark that the blind-play streak has ended
-			g.BlindPlays = 0
-
-			// Increase the misplay streak
-			g.Misplays++
-			if g.Misplays > 2 {
-				// There is no sound effect for more than 2 misplays in a row
-				g.Misplays = 2
-			}
-			g.Sound = "fail" + strconv.Itoa(g.Misplays)
-		}
-
 		g.Actions = append(g.Actions, ActionStrike{
 			Type:  "strike",
 			Num:   g.Strikes,
@@ -248,84 +141,45 @@ func (p *GamePlayer) PlayCard(c *Card) bool {
 		})
 		t.NotifyGameAction()
 
-		return p.DiscardCard(c)
+		p.DiscardCard(c)
+		return
 	}
 
 	// Handle successful card plays
 	c.Played = true
 	g.Score++
-	g.Stacks[c.Suit] = c.Rank
+	g.Stacks[c.SuitIndex] = c.Rank
 	if c.Rank == 0 {
-		g.Stacks[c.Suit] = -1 // A rank 0 card is the "START" card
+		g.Stacks[c.SuitIndex] = -1 // A rank 0 card is the "START" card
 	}
-
-	// Mark that the misplay streak has ended
-	g.Misplays = 0
 
 	g.Actions = append(g.Actions, ActionPlay{
-		Type: "play",
-		Which: Which{
-			Index: p.Index,
-			Suit:  c.Suit,
-			Rank:  c.Rank,
-			Order: c.Order,
-		},
+		Type:        "play",
+		PlayerIndex: p.Index,
+		Order:       c.Order,
+		SuitIndex:   c.SuitIndex,
+		Rank:        c.Rank,
 	})
 	t.NotifyGameAction()
-
-	// Send the "message" about the play
-	text := p.Name + " plays "
-	if strings.HasPrefix(g.Options.Variant, "Throw It in a Hole") {
-		text += "a card"
-	} else {
-		text += c.Name(g)
-	}
-	text += " from "
-	if c.Slot == -1 {
-		text += "the deck"
-	} else {
-		text += "slot #" + strconv.Itoa(c.Slot)
-	}
-	if c.Touched {
-		// Mark that the blind-play streak has ended
-		g.BlindPlays = 0
-	} else {
-		text += " (blind)"
-		g.BlindPlays++
-		if g.BlindPlays > 4 {
-			// There is no sound effect for more than 4 blind plays in a row
-			g.BlindPlays = 4
-		}
-		g.Sound = "blind" + strconv.Itoa(g.BlindPlays)
-	}
-	g.Actions = append(g.Actions, ActionText{
-		Type: "text",
-		Text: text,
-	})
-	t.NotifyGameAction()
-	logger.Info(t.GetName() + text)
 
 	// Give the team a clue if the final card of the suit was played
 	// (this will always be a 5 unless it is a custom variant)
 	extraClue := c.Rank == 5
 
 	// Handle custom variants that do not play in order from 1 to 5
-	if variants[g.Options.Variant].HasReversedSuits() {
+	if variant.HasReversedSuits() {
 		extraClue = (c.Rank == 5 || c.Rank == 1) &&
-			g.StackDirections[c.Suit] == StackDirectionFinished
+			g.PlayStackDirections[c.SuitIndex] == StackDirectionFinished
 	}
 
 	if extraClue {
 		// Some variants do not grant an extra clue when successfully playing a 5
-		if !strings.HasPrefix(g.Options.Variant, "Throw It in a Hole") {
+		if variant.ShouldGiveClueTokenForPlaying5() {
 			g.ClueTokens++
 		}
 
 		// The extra clue is wasted if the team is at the maximum amount of clues already
-		clueLimit := MaxClueNum
-		if strings.HasPrefix(g.Options.Variant, "Clue Starved") {
-			clueLimit *= 2
-		}
+		clueLimit := variant.GetAdjustedClueTokens(MaxClueNum)
 		if g.ClueTokens > clueLimit {
 			g.ClueTokens = clueLimit
 		}
@@ -345,19 +199,10 @@ func (p *GamePlayer) PlayCard(c *Card) bool {
 	if newMaxScore < g.MaxScore {
 		// Decrease the maximum score possible for this game
 		g.MaxScore = newMaxScore
-
-		// Only play the sad sound if we are not in the final round
-		if g.EndTurn == -1 {
-			g.Sound = "sad"
-		}
 	}
-
-	// This is not a "double discard" situation, since the card successfully played
-	return false
 }
 
-// DiscardCard returns true if it is a "double discard" situation
-func (p *GamePlayer) DiscardCard(c *Card) bool {
+func (p *GamePlayer) DiscardCard(c *Card) {
 	// Local variables
 	g := p.Game
 	t := g.Table
@@ -376,78 +221,21 @@ func (p *GamePlayer) DiscardCard(c *Card) bool {
 	c.Discarded = true
 
 	g.Actions = append(g.Actions, ActionDiscard{
-		Type:   "discard",
-		Failed: c.Failed,
-		Which: Which{
-			Index: p.Index,
-			Rank:  c.Rank,
-			Suit:  c.Suit,
-			Order: c.Order,
-		},
+		Type:        "discard",
+		PlayerIndex: p.Index,
+		Order:       c.Order,
+		Rank:        c.Rank,
+		SuitIndex:   c.SuitIndex,
+		Failed:      c.Failed,
 	})
 	t.NotifyGameAction()
-
-	text := p.Name + " "
-	if c.Failed {
-		if strings.HasPrefix(g.Options.Variant, "Throw It in a Hole") {
-			text += "plays"
-		} else {
-			text += "fails to play"
-		}
-	} else {
-		text += "discards"
-	}
-	text += " "
-	if strings.HasPrefix(g.Options.Variant, "Throw It in a Hole") && c.Failed {
-		text += "a card"
-	} else {
-		text += c.Name(g)
-	}
-	text += " from "
-	if c.Slot == -1 {
-		text += "the deck"
-	} else {
-		text += "slot #" + strconv.Itoa(c.Slot)
-	}
-	if !c.Failed && c.Touched {
-		text += " (clued)"
-		g.Sound = "turn_discard_clued"
-	}
-	if c.Failed && c.Slot != -1 && !c.Touched {
-		text += " (blind)"
-	}
-
-	g.Actions = append(g.Actions, ActionText{
-		Type: "text",
-		Text: text,
-	})
-	t.NotifyGameAction()
-	logger.Info(t.GetName() + text)
-
-	// Check to see if revealing this card would surprise the player
-	// (we want to have it in the middle of the function so that it will
-	// overwrite the clued card sound but not overwrite the sad sound)
-	p.CheckSurprise(c)
 
 	// This could have been a discard (or misplay) or a card needed to get the maximum score
 	newMaxScore := g.GetMaxScore()
 	if newMaxScore < g.MaxScore {
 		// Decrease the maximum score possible for this game
 		g.MaxScore = newMaxScore
-
-		// Only play the sad sound if we are not in the final round and this was not a misplay
-		if g.EndTurn == -1 && !c.Failed {
-			g.Sound = "sad"
-		}
 	}
-
-	// This could be a double discard situation if there is only one other copy of this card
-	// and it needs to be played
-	total, discarded := g.GetSpecificCardNum(c.Suit, c.Rank)
-	doubleDiscard := total == discarded+1 && c.NeedsToBePlayed(g)
-
-	// Return whether or not this is a "double discard" situation
-	return doubleDiscard
 }
 
 func (p *GamePlayer) DrawCard() {
@@ -466,15 +254,17 @@ func (p *GamePlayer) DrawCard() {
 	p.Hand = append(p.Hand, c)
 
 	g.Actions = append(g.Actions, ActionDraw{
-		Type:  "draw",
-		Who:   p.Index,
-		Rank:  c.Rank,
-		Suit:  c.Suit,
-		Order: c.Order,
+		Type:        "draw",
+		PlayerIndex: p.Index,
+		Order:       c.Order,
+		SuitIndex:   c.SuitIndex,
+		Rank:        c.Rank,
 	})
-	if t.Running {
-		t.NotifyGameAction()
-	}
+	t.NotifyGameAction()
+
+	// If a card slides from slot 1 to slot 2, we might need to reveal the identity of the card to
+	// a player with the "Slow-Witted" detrimental character
+	characterSendCardIdentityOfSlot2(g, p.Index)
 
 	// Check to see if that was the last card drawn
 	// (in "All or Nothing" games, the game goes on until all the cards are played)

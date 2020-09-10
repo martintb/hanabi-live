@@ -1,6 +1,7 @@
 package main
 
 import (
+	"html"
 	"strconv"
 	"strings"
 	"unicode"
@@ -16,25 +17,17 @@ import (
 //   note: 'b1, m1',
 // }
 func commandNote(s *Session, d *CommandData) {
-	/*
-		Validate
-		(some code is copied from the "sanitizeChatInput()" function)
-	*/
-
-	// Validate that the table exists
-	tableID := d.TableID
-	var t *Table
-	if v, ok := tables[tableID]; !ok {
-		s.Warning("Table " + strconv.Itoa(tableID) + " does not exist.")
+	t, exists := getTableAndLock(s, d.TableID, !d.NoLock)
+	if !exists {
 		return
-	} else {
-		t = v
 	}
-	g := t.Game
+	if !d.NoLock {
+		defer t.Mutex.Unlock()
+	}
 
 	// Validate that the game has started
 	if !t.Running {
-		s.Warning(ChatCommandNotStartedFail)
+		s.Warning(NotStartedFail)
 		return
 	}
 
@@ -45,10 +38,11 @@ func commandNote(s *Session, d *CommandData) {
 	}
 
 	// Validate that they are in the game
-	i := t.GetPlayerIndexFromID(s.UserID())
-	j := t.GetSpectatorIndexFromID(s.UserID())
-	if i == -1 && j == -1 {
-		s.Warning("You are not at table " + strconv.Itoa(tableID) + ", so you cannot send a note.")
+	playerIndex := t.GetPlayerIndexFromID(s.UserID())
+	spectatorIndex := t.GetSpectatorIndexFromID(s.UserID())
+	if playerIndex == -1 && spectatorIndex == -1 {
+		s.Warning("You are not at table " + strconv.FormatUint(t.ID, 10) + ", " +
+			"so you cannot send a note.")
 		return
 	}
 
@@ -57,6 +51,9 @@ func commandNote(s *Session, d *CommandData) {
 	if len(d.Note) > MaxChatLength {
 		d.Note = d.Note[0 : MaxChatLength-1]
 	}
+
+	// Remove any non-printable characters, if any
+	d.Msg = removeNonPrintableCharacters(d.Msg)
 
 	// Check for valid UTF8
 	if !utf8.Valid([]byte(d.Note)) {
@@ -83,21 +80,24 @@ func commandNote(s *Session, d *CommandData) {
 		return
 	}
 
-	// Sanitize the message using the bluemonday library to stop
-	// various attacks against other players
-	d.Note = bluemondayStrictPolicy.Sanitize(d.Note)
+	// Escape all HTML special characters (to stop various attacks against other players)
+	d.Msg = html.EscapeString(d.Msg)
 
-	/*
-		Note
-	*/
+	logger.Debug("User \"" + s.Username() + "\" submitted a note of: " + d.Msg)
+	note(d, t, playerIndex, spectatorIndex)
+}
 
-	if i > -1 {
-		p := g.Players[i]
+func note(d *CommandData, t *Table, playerIndex int, spectatorIndex int) {
+	// Local variables
+	g := t.Game
+
+	if playerIndex > -1 {
+		p := g.Players[playerIndex]
 
 		// Update the array that contains all of their notes
 		p.Notes[d.Order] = d.Note
-	} else if j > -1 {
-		sp := t.Spectators[j]
+	} else if spectatorIndex > -1 {
+		sp := t.Spectators[spectatorIndex]
 
 		// Update the array that contains all of their notes
 		sp.Notes[d.Order] = d.Note

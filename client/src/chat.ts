@@ -1,23 +1,30 @@
 // Users can chat in the lobby, in the pregame, and in a game
 // Logic for the game chat box is located separately in "game/chat.ts"
 
-// Imports
+import { isArray } from 'jquery';
 import linkifyHtml from 'linkifyjs/html';
 import emojis from '../../data/emojis.json';
 import emoteCategories from '../../data/emotes.json';
 import chatCommands from './chatCommands';
-import ChatMessage from './ChatMessage';
 import { FADE_TIME } from './constants';
 import globals from './globals';
+import Screen from './lobby/types/Screen';
+import { isEmpty, parseIntSafe } from './misc';
 import * as modals from './modals';
+import ChatMessage from './types/ChatMessage';
 
 // Variables
 const emojiMap = new Map<string, string>();
+const emojiList: string[] = [];
 const emoteList: string[] = [];
 let chatLineNum = 1;
-let tabCompleteCounter = 0;
-let tabCompleteIndex = 0;
+let lastPM = '';
+let datetimeLastChatInput = new Date().getTime();
+let typedChatHistory: string[] = [];
+let typedChatHistoryIndex: number | null = null;
+let tabCompleteWordListIndex: number | null = null;
 let tabCompleteWordList: string[] = [];
+let tabCompleteOriginalText = '';
 
 export const init = () => {
   $('#lobby-chat-input').on('input', input);
@@ -30,28 +37,51 @@ export const init = () => {
   $('#game-chat-input').on('keypress', keypress('table'));
   $('#game-chat-input').on('keydown', keydown);
 
-  // Make an emote list and ensure that there are no overlapping emotes
-  const emoteMap = new Map();
+  // Make an emoji list/map and ensure that there are no overlapping emoji
+  for (const [emojiName, emoji] of Object.entries(emojis)) {
+    if (emojiMap.has(emojiName)) {
+      throw new Error(`Duplicate emoji found: ${emojiName}`);
+    }
+    emojiMap.set(emojiName, emoji);
+    emojiList.push(`:${emojiName}:`);
+    // (we use surrounding colons since that is the way that emoji are detected)
+  }
+
+  // Make an emote list/map and ensure that there are no overlapping emotes
+  const emoteMap = new Map(); // The map can be ephemeral
   for (const category of Object.values(emoteCategories)) {
-    for (const emote of category) {
-      if (emoteMap.has(emote)) {
-        throw new Error(`Duplicate emote found: ${emote}`);
-      } else {
-        emoteMap.set(emote, true);
+    for (const emoteName of category) {
+      if (emoteMap.has(emoteName)) {
+        throw new Error(`Duplicate emote found: ${emoteName}`);
       }
-      emoteList.push(emote);
+      emoteMap.set(emoteName, true);
+      emoteList.push(emoteName);
     }
   }
 
-  // Convert the emoji JSON to a map for easy reference
-  for (const [emojiName, emoji] of Object.entries(emojis)) {
-    emojiMap.set(emojiName, emoji);
+  // Retrieve the contents of the typed chat list from local storage (cookie)
+  const typedChatHistoryString = localStorage.getItem('typedChatHistory');
+  if (
+    typedChatHistoryString !== null
+    && typedChatHistoryString !== ''
+    && typedChatHistoryString !== '[]'
+  ) {
+    let potentialArray: unknown;
+    try {
+      potentialArray = JSON.parse(typedChatHistoryString) as unknown;
+    } catch (err) {
+      return;
+    }
+
+    if (isArray(potentialArray)) {
+      typedChatHistory = potentialArray as string[];
+    }
   }
 };
 
 const input = function input(this: HTMLElement, event: JQuery.Event) {
   const element = $(this);
-  if (!element) {
+  if (element === undefined) {
     throw new Error('Failed to get the element for the input function.');
   }
   const text = element.val();
@@ -63,8 +93,8 @@ const input = function input(this: HTMLElement, event: JQuery.Event) {
   // (but don't spam the server with more than one message a second)
   if (this.id !== 'lobby-chat-input') {
     const datetimeNow = new Date().getTime();
-    if (datetimeNow - globals.datetimeLastChatInput >= 1000) {
-      globals.datetimeLastChatInput = datetimeNow;
+    if (datetimeNow - datetimeLastChatInput >= 1000) {
+      datetimeLastChatInput = datetimeNow;
       globals.conn!.send('chatTyping', {
         tableID: globals.tableID,
       });
@@ -72,8 +102,8 @@ const input = function input(this: HTMLElement, event: JQuery.Event) {
   }
 
   // /r - A PM reply
-  if (text === '/r ' && globals.lastPM !== '') {
-    element.val(`/pm ${globals.lastPM} `);
+  if (text === '/r ' && lastPM !== '') {
+    element.val(`/pm ${lastPM} `);
     return;
   }
 
@@ -91,7 +121,7 @@ const input = function input(this: HTMLElement, event: JQuery.Event) {
       const emojiName = match.slice(1, -1); // Strip off the colons
 
       const emoji = emojiMap.get(emojiName);
-      if (typeof emoji !== 'undefined') {
+      if (emoji !== undefined) {
         const newText = text.replace(match, emoji);
         element.val(newText);
         event.preventDefault();
@@ -106,18 +136,22 @@ const keypress = (room: string) => function keypressFunction(
   event: JQuery.Event,
 ) {
   const element = $(this);
-  if (!element) {
+  if (element === undefined) {
     throw new Error('Failed to get the element for the keypress function.');
   }
 
+  // We have typed a new character, so reset the tab-complete variables
+  tabCompleteWordList = [];
+  tabCompleteWordListIndex = null;
+
   if (event.key === 'Enter') {
-    submit(room, element);
+    send(room, element);
   }
 };
 
-const submit = (room: string, element: JQuery<HTMLElement>) => {
-  const msg = element.val();
-  if (!msg) {
+const send = (room: string, element: JQuery<HTMLElement>) => {
+  let msg = element.val();
+  if (isEmpty(msg)) {
     return;
   }
   if (typeof msg !== 'string') {
@@ -138,17 +172,36 @@ const submit = (room: string, element: JQuery<HTMLElement>) => {
     return;
   }
 
-  // Use "startsWith" instead of "===" to work around an unknown bug where
+  // Emojis are normally replaced before the user presses enter
+  // However, if they tab-complete an emoji and then press enter before entering in any other
+  // keystrokes, then the non-replaced emoji will be sent over the wire
+  // Replace any non-replaced emoji before that happens
+  msg = fillEmojis(msg);
+
+  // Use "startsWith" instead of "===" to work around an bug where
   // the room can already have the table number appended (e.g. "table123")
-  if (room.startsWith('table')) {
-    room = `table${globals.tableID}`;
+  let roomID = room;
+  if (roomID.startsWith('table')) {
+    roomID = `table${globals.tableID}`;
   }
 
   // Add the chat message to the typed history so that we can use the up arrow later
-  globals.typedChatHistory.unshift(msg);
+  // (but only if it isn't in the history already)
+  if (!typedChatHistory.includes(msg)) {
+    const newLength = typedChatHistory.unshift(msg);
+
+    // Prevent the typed history from getting too large
+    if (newLength > 100) {
+    // Pop off the final element
+      typedChatHistory.pop();
+    }
+
+    // Save the typed chat history to local storage (cookie)
+    localStorage.setItem('typedChatHistory', JSON.stringify(typedChatHistory));
+  }
 
   // Reset the typed history index
-  globals.typedChatHistoryIndex = -1;
+  typedChatHistoryIndex = null;
 
   // Check for chat commands
   // Each chat command should also have an error handler in "chat_command.go"
@@ -160,8 +213,8 @@ const submit = (room: string, element: JQuery<HTMLElement>) => {
     command = command.toLowerCase();
 
     const chatCommandFunction = chatCommands.get(command);
-    if (typeof chatCommandFunction !== 'undefined') {
-      chatCommandFunction(room, args);
+    if (chatCommandFunction !== undefined) {
+      chatCommandFunction(roomID, args);
       return;
     }
   }
@@ -169,13 +222,13 @@ const submit = (room: string, element: JQuery<HTMLElement>) => {
   // This is not a command, so send a the chat message to the server
   globals.conn!.send('chat', {
     msg,
-    room,
+    room: roomID,
   });
 };
 
 const keydown = function keydown(this: HTMLElement, event: JQuery.Event) {
   const element = $(this);
-  if (!element) {
+  if (element === undefined) {
     throw new Error('Failed to get the element for the keydown function.');
   }
 
@@ -188,158 +241,211 @@ const keydown = function keydown(this: HTMLElement, event: JQuery.Event) {
     arrowDown(element);
   } else if (event.key === 'Tab') {
     event.preventDefault();
-    tab(element);
+    tab(element, event);
   }
 };
 
 export const arrowUp = (element: JQuery<HTMLElement>) => {
-  globals.typedChatHistoryIndex += 1;
+  if (typedChatHistoryIndex === null) {
+    typedChatHistoryIndex = 0;
+  } else {
+    typedChatHistoryIndex += 1;
+  }
 
   // Check to see if we have reached the end of the history list
-  if (globals.typedChatHistoryIndex > globals.typedChatHistory.length - 1) {
-    globals.typedChatHistoryIndex = globals.typedChatHistory.length - 1;
+  const finalIndex = typedChatHistory.length - 1;
+  if (typedChatHistoryIndex > finalIndex) {
+    typedChatHistoryIndex = finalIndex;
     return;
   }
 
   // Set the chat input box to what we last typed
-  const retrievedHistory = globals.typedChatHistory[globals.typedChatHistoryIndex];
+  const retrievedHistory = typedChatHistory[typedChatHistoryIndex];
   element.val(retrievedHistory);
 };
 
 export const arrowDown = (element: JQuery<HTMLElement>) => {
-  globals.typedChatHistoryIndex -= 1;
-
-  // Check to see if we have reached the beginning of the history list
-  // We check for -2 instead of -1 here because we want down arrow to clear the chat
-  if (globals.typedChatHistoryIndex <= -2) {
-    globals.typedChatHistoryIndex = -1;
+  if (typedChatHistoryIndex !== null) {
+    typedChatHistoryIndex -= 1;
+    if (typedChatHistoryIndex < 0) {
+      typedChatHistoryIndex = null;
+    }
+  }
+  if (typedChatHistoryIndex === null) {
+    element.val('');
     return;
   }
 
   // Set the chat input box to what we last typed
-  const retrievedHistory = globals.typedChatHistory[globals.typedChatHistoryIndex];
+  const retrievedHistory = typedChatHistory[typedChatHistoryIndex];
   element.val(retrievedHistory);
 };
 
-export const tab = (element: JQuery<HTMLElement>) => {
+export const tab = (element: JQuery<HTMLElement>, event: JQuery.Event) => {
+  // Parse the final word from what we have typed so far
+  let message = element.val();
+  if (typeof message !== 'string') {
+    message = '';
+  }
+  message = message.trim(); // Remove all leading and trailing whitespace
+  const messageWords = message.split(' ');
+  const finalWord = messageWords[messageWords.length - 1];
+
+  // Increment the tab counter
+  if (tabCompleteWordListIndex === null) {
+    tabInitAutoCompleteList(event, finalWord);
+  } else if (event.shiftKey === true) {
+    // Shift-tab goes backwards
+    tabCompleteWordListIndex -= 1;
+    if (tabCompleteWordListIndex === -1) {
+      tabCompleteWordListIndex = null;
+    }
+  } else {
+    // Tab goes forwards
+    tabCompleteWordListIndex += 1;
+    if (tabCompleteWordListIndex === tabCompleteWordList.length) {
+      tabCompleteWordListIndex = null;
+    }
+  }
+
+  if (tabCompleteWordListIndex === null) {
+    // We have rotated through all of the possible auto-complete entries
+    // (or there are no auto-complete matches for this particular sequence of text),
+    // so return the original text
+    messageWords[messageWords.length - 1] = tabCompleteOriginalText;
+    element.val(messageWords.join(' '));
+    return;
+  }
+
+  // Replace the final word with the new auto-complete word
+  const autoCompleteWord = tabCompleteWordList[tabCompleteWordListIndex];
+  messageWords[messageWords.length - 1] = autoCompleteWord;
+  element.val(messageWords.join(' '));
+};
+
+// This is the first time we are pressing tab on this particular sequence of text
+const tabInitAutoCompleteList = (event: JQuery.Event, finalWord: string) => {
+  // Save our current partially-completed word in case we need to cycle back to it later
+  tabCompleteOriginalText = finalWord;
+
   // Make a list of the currently connected users
   const userList = [];
   for (const user of globals.userMap.values()) {
     userList.push(user.name);
   }
 
-  // We want to be able to tab complete both users and emotes
-  const tabList = userList.concat(emoteList);
-  tabList.sort();
+  // Combine it with the list of emotes and the list of emoji
+  const usersAndEmojisAndEmotesList = userList.concat(emojiList).concat(emoteList);
+  usersAndEmojisAndEmotesList.sort(
+    // We want to do a case-insensitive sort, which will not occur by default
+    (a, b) => a.toLowerCase().localeCompare(b.toLowerCase()),
+  );
+  fixCustomEmotePriority(usersAndEmojisAndEmotesList);
 
+  // Create a list of all the things that could match what we have typed thus far
+  tabCompleteWordList = [];
+  for (const word of usersAndEmojisAndEmotesList) {
+    const partialWord = word.slice(0, finalWord.length);
+    if (partialWord.toLowerCase() === finalWord.toLowerCase()) {
+      tabCompleteWordList.push(word);
+    }
+  }
+
+  // If there were no possible matches, keep the "tabCompleteWordListIndex" as null as return
+  if (tabCompleteWordList.length === 0) {
+    return;
+  }
+
+  // Set the starting index, depending on whether or not we are pressing shift
+  if (event.shiftKey === true) {
+    // Shift-tab goes backwards
+    tabCompleteWordListIndex = tabCompleteWordList.length - 1;
+  } else {
+    // Tab goes forwards
+    tabCompleteWordListIndex = 0;
+  }
+};
+
+const fixCustomEmotePriority = (usersAndEmotesList: string[]) => {
   // Prioritize the more commonly used NotLikeThis over NootLikeThis
-  const notLikeThisIndex = tabList.indexOf('NotLikeThis');
-  const nootLikeThisIndex = tabList.indexOf('NootLikeThis');
-  tabList[notLikeThisIndex] = 'NootLikeThis';
-  tabList[nootLikeThisIndex] = 'NotLikeThis';
+  const notLikeThisIndex = usersAndEmotesList.indexOf('NotLikeThis');
+  const nootLikeThisIndex = usersAndEmotesList.indexOf('NootLikeThis');
+  usersAndEmotesList[notLikeThisIndex] = 'NootLikeThis';
+  usersAndEmotesList[nootLikeThisIndex] = 'NotLikeThis';
 
   // Prioritize the more commonly used Kappa over Kadda
-  const kappaIndex = tabList.indexOf('Kappa');
-  const kaddaIndex = tabList.indexOf('Kadda');
-  tabList[kaddaIndex] = 'Kappa';
-  tabList[kappaIndex] = 'Kadda';
+  const kappaIndex = usersAndEmotesList.indexOf('Kappa');
+  const kaddaIndex = usersAndEmotesList.indexOf('Kadda');
+  usersAndEmotesList[kaddaIndex] = 'Kappa';
+  usersAndEmotesList[kappaIndex] = 'Kadda';
+
+  // Local variables
+  let tempEmote1;
 
   // Prioritize the more commonly used FrankerZ over all the other Franker emotes
-  const frankerZIndex = tabList.indexOf('FrankerZ');
-  const frankerBIndex = tabList.indexOf('FrankerB');
-  let tempEmote1 = tabList[frankerBIndex];
-  tabList[frankerBIndex] = 'FrankerZ';
+  const frankerZIndex = usersAndEmotesList.indexOf('FrankerZ');
+  const frankerBIndex = usersAndEmotesList.indexOf('FrankerB');
+  tempEmote1 = usersAndEmotesList[frankerBIndex];
+  usersAndEmotesList[frankerBIndex] = 'FrankerZ';
   for (let i = frankerBIndex; i < frankerZIndex; i++) {
-    const tempEmote2 = tabList[i + 1];
-    tabList[i + 1] = tempEmote1;
+    const tempEmote2 = usersAndEmotesList[i + 1];
+    usersAndEmotesList[i + 1] = tempEmote1;
     tempEmote1 = tempEmote2;
   }
 
-  if (tabCompleteCounter === 0) {
-    // This is the first time we are pressing tab
-    let message = element.val();
-    if (typeof message !== 'string') {
-      message = '';
-    }
-    message = message.trim();
-
-    tabCompleteWordList = message.split(' ');
-    const messageEnd = tabCompleteWordList[tabCompleteWordList.length - 1];
-    for (let i = 0; i < tabList.length; i++) {
-      const tabWord = tabList[i];
-      const temp = tabWord.slice(0, messageEnd.length).toLowerCase();
-      if (temp === messageEnd.toLowerCase()) {
-        tabCompleteIndex = i;
-        tabCompleteCounter += 1;
-        let newMessage = '';
-        for (let j = 0; j < tabCompleteWordList.length - 1; j++) {
-          newMessage += tabCompleteWordList[j];
-          newMessage += ' ';
-        }
-        newMessage += tabWord;
-        element.val(newMessage);
-        break;
-      }
-    }
-  } else {
-    // We have already pressed tab once, so we need to cycle through the rest of the
-    // autocompletion words
-    let index = tabCompleteCounter + tabCompleteIndex;
-    const messageEnd = tabCompleteWordList[tabCompleteWordList.length - 1];
-    if (tabCompleteCounter >= tabList.length) {
-      tabCompleteCounter = 0;
-      element.val(messageEnd);
-      index = tabCompleteCounter + tabCompleteIndex;
-    }
-    const tempSlice = tabList[index].slice(0, messageEnd.length).toLowerCase();
-    if (tempSlice === messageEnd.toLowerCase()) {
-      tabCompleteCounter += 1;
-      let newMessage = '';
-      for (let i = 0; i < tabCompleteWordList.length - 1; i++) {
-        newMessage += tabCompleteWordList[i];
-        newMessage += ' ';
-      }
-      newMessage += tabList[index];
-      element.val(newMessage);
-    } else {
-      tabCompleteCounter = 0;
-      let newMessage = '';
-      for (let i = 0; i < tabCompleteWordList.length - 1; i++) {
-        newMessage += tabCompleteWordList[i];
-        newMessage += ' ';
-      }
-      newMessage += messageEnd;
-      element.val(newMessage);
-    }
+  // Prioritize the more commonly used monkaS over all the other monka emotes
+  const monkaSIndex = usersAndEmotesList.indexOf('monkaS');
+  const monkaEyesIndex = usersAndEmotesList.indexOf('monkaEyes');
+  tempEmote1 = usersAndEmotesList[monkaEyesIndex];
+  usersAndEmotesList[monkaEyesIndex] = 'monkaS';
+  for (let i = monkaEyesIndex; i < monkaSIndex; i++) {
+    const tempEmote2 = usersAndEmotesList[i + 1];
+    usersAndEmotesList[i + 1] = tempEmote1;
+    tempEmote1 = tempEmote2;
   }
 };
 
 export const add = (data: ChatMessage, fast: boolean) => {
   // Find out which chat box we should add the new chat message to
-  let chat;
-  if (data.recipient === globals.username) {
-    // If this is a PM that we are receiving,
-    // we want it to always go to either the lobby chat or the game chat
-    if (globals.currentScreen === 'game') {
+  let chat: JQuery<HTMLElement> | undefined;
+  if (data.room === 'lobby') {
+    chat = $('#lobby-chat-text');
+  } else if (data.room.startsWith('table')) {
+    if (globals.currentScreen === Screen.PreGame) {
+      chat = $('#lobby-chat-pregame-text');
+    } else if (globals.currentScreen === Screen.Game) {
+      chat = $('#game-chat-text');
+    } else {
+      // Ignore table chat if we are not in a pre-game and not in a game
+      return;
+    }
+  } else if (data.room === '') {
+    // A blank room indicates a private message (PM)
+    // PMs do not have a room associated with them,
+    // so we default to displaying them on the chat window that the user currently has open
+    if (data.recipient === globals.username) {
+      // This is a private message (PM) that we are receiving
+      // Record who our last PM is from
+      lastPM = data.who;
+    }
+
+    if (globals.currentScreen === Screen.PreGame) {
+      chat = $('#lobby-chat-pregame-text');
+    } else if (globals.currentScreen === Screen.Game) {
       chat = $('#game-chat-text');
     } else {
       chat = $('#lobby-chat-text');
     }
-
-    // Also, record who our last PM is from
-    globals.lastPM = data.who;
-  } else if (data.room === 'lobby') {
-    chat = $('#lobby-chat-text');
-  } else if (globals.currentScreen === 'pregame') {
-    chat = $('#lobby-chat-pregame-text');
   } else {
-    chat = $('#game-chat-text');
+    throw new Error('Failed to parse the room name.');
   }
-  if (!chat) {
+  if (chat === undefined) {
     throw new Error('Failed to get the chat element in the "chat.add()" function.');
   }
 
   // Automatically generate links from any URLs that are present in the message
+  // (we must use "linkifyjs/html" instead of "linkifyjs/string" because the latter will convert
+  // "&gt;" to "&amp;gt;", and the server has already escaped HTML input)
   data.msg = linkifyHtml(data.msg, {
     target: '_blank',
     attributes: {
@@ -349,7 +455,7 @@ export const add = (data: ChatMessage, fast: boolean) => {
 
   // Convert emotes to images
   data.msg = fillDiscordEmotes(data.msg);
-  data.msg = fillLocalEmotes(data.msg);
+  data.msg = fillTwitchEmotes(data.msg);
 
   // Get the hours and minutes from the time
   const datetime = new Intl.DateTimeFormat(undefined, {
@@ -367,7 +473,7 @@ export const add = (data: ChatMessage, fast: boolean) => {
       line += `<span class="red">[PM to <strong>${data.recipient}</strong>]</span>&nbsp; `;
     }
   }
-  if (data.server || data.recipient) {
+  if (data.server === true || (data.recipient !== undefined && data.recipient !== '')) {
     line += data.msg;
   } else if (data.who) {
     line += `&lt;<strong>${data.who}</strong>&gt;&nbsp; `;
@@ -375,7 +481,7 @@ export const add = (data: ChatMessage, fast: boolean) => {
   } else {
     line += data.msg;
   }
-  if (data.server && line.includes('[Server Notice]')) {
+  if (data.server === true && line.includes('[Server Notice]')) {
     line = line.replace('[Server Notice]', '<span class="red">[Server Notice]</span>');
   }
   line += '</span><br />';
@@ -384,8 +490,8 @@ export const add = (data: ChatMessage, fast: boolean) => {
   // https://stackoverflow.com/questions/6271237/detecting-when-user-scrolls-to-bottom-of-div-with-jquery
   // If we are already scrolled to the bottom, then it is ok to automatically scroll
   let autoScroll = false;
-  const topPositionOfScrollBar = chat.scrollTop() || 0;
-  const innerHeight = chat.innerHeight() || 0;
+  const topPositionOfScrollBar = chat.scrollTop() ?? 0;
+  const innerHeight = chat.innerHeight() ?? 0;
   if (topPositionOfScrollBar + Math.ceil(innerHeight) >= chat[0].scrollHeight) {
     autoScroll = true;
   }
@@ -406,8 +512,31 @@ export const add = (data: ChatMessage, fast: boolean) => {
   const index = globals.peopleTyping.indexOf(data.who);
   if (index !== -1) {
     globals.peopleTyping.splice(index, 1);
-    updatePeopletyping();
+    updatePeopleTyping();
   }
+
+  // Handle client-side commands
+  const match = data.msg.match(/^\/suggest (\d+)$/);
+  if (match) {
+    const segmentString = match[1];
+    const segment = parseIntSafe(segmentString);
+    if (!Number.isNaN(segment) && globals.currentScreen === Screen.Game && globals.ui !== null) {
+      globals.ui.suggestTurn(data.who, segment);
+    }
+  }
+};
+
+// addSelf is used when the client needs to send chat messages to itself
+export const addSelf = (msg: string, room: string) => {
+  add({
+    msg,
+    who: '',
+    discord: false,
+    server: true,
+    datetime: new Date().getTime(),
+    room,
+    recipient: '',
+  }, false);
 };
 
 // Discord emotes are in the form of:
@@ -425,14 +554,29 @@ const fillDiscordEmotes = (message: string) => {
   return filledMessed;
 };
 
-const fillLocalEmotes = (message: string) => {
+const fillEmojis = (message: string) => {
+  let filledMessage = message;
+
+  // Search through the text for each emoji
+  for (const [emojiName, emoji] of Object.entries(emojis)) {
+    const emojiTag = `:${emojiName}:`;
+    const index = message.indexOf(emojiTag);
+    if (index !== -1) {
+      filledMessage = filledMessage.replace(emojiTag, emoji);
+    }
+  }
+
+  return filledMessage;
+};
+
+const fillTwitchEmotes = (message: string) => {
   let filledMessage = message;
 
   // Search through the text for each emote
   for (const [category, emotes] of Object.entries(emoteCategories)) {
     for (const emote of emotes) {
       // We don't want to replace the emote if it is followed by a quote,
-      // because we don't want to replace Discord emoptes
+      // because we don't want to replace Discord emotes
       const index = message.indexOf(emote);
       if (index !== -1 && message[index + emote.length] !== '"') {
         const re = new RegExp(`\\b${emote}\\b`, 'g'); // "\b" is a word boundary in regex
@@ -443,12 +587,12 @@ const fillLocalEmotes = (message: string) => {
   }
 
   // Also handle emotes that have special characters in them
-  if (filledMessage.indexOf('&lt;3') !== -1) {
+  if (filledMessage.indexOf('&lt;3') !== -1) { // The Twitch heart emote
     const emoteTag = '<img class="chat-emote" src="/public/img/emotes/other/3.png" title="&lt;3" />';
     const re = new RegExp('&lt;3', 'g'); // "\b" won't work with a semicolon
     filledMessage = filledMessage.replace(re, emoteTag);
   }
-  if (filledMessage.indexOf('D:') !== -1) {
+  if (filledMessage.indexOf('D:') !== -1) { // A BetterTwitchTV emote
     const emoteTag = '<img class="chat-emote" src="/public/img/emotes/other/D.png" title="D:" />';
     // From: https://stackoverflow.com/questions/4134605/regex-and-the-colon
     const re = new RegExp(/(^|\s)D:(\s|$)/, 'g'); // "\b" won't work with a colon
@@ -458,7 +602,7 @@ const fillLocalEmotes = (message: string) => {
   return filledMessage;
 };
 
-export const updatePeopletyping = () => {
+export const updatePeopleTyping = () => {
   const chat1 = $('#lobby-chat-pregame-istyping');
   const chat2 = $('#game-chat-istyping');
 

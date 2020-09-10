@@ -11,13 +11,13 @@
   "editor.rulers": [100],
 
   // This is needed for VSCode to see ESLint errors on TypeScript files
-  "eslint.validate": [
-    "javascript",
-    "typescript"
+  // (and ignore JavaScript files such as webpack.config.js)
+  "eslint.probe": [
+    "html",
+    "typescript",
   ],
 
-  // This is needed because the "package.json" and so forth are not located in the root of the
-  // repository
+  // This is needed because the ".eslintrc.js" is not located in the root of the repository
   "eslint.workingDirectories": [
     "./client"
   ],
@@ -30,6 +30,9 @@
   // Linux line endings are used in this project
   "files.eol": "\n",
 
+  // Automatically removing all trailing whitespace when saving a file
+  "files.trimTrailingWhitespace": true,
+
   // The default Golang linter is golint, which is only concerned with coding style
   // GolangCI-Lint does a suite of different checks
   "go.lintTool": "golangci-lint",
@@ -40,17 +43,28 @@
       "--fast",
   ],
 
-  // Use "black" to automatically format Python files
-  // https://github.com/psf/black
-  "python.formatting.provider": "black",
+  // This is needed because the "jest.config.js" is not located in the root of the repository
+  "jest.rootPath": "client",
 
-  // Automatically run the "yapf" formatter when a Python file is saved
+  // Configure glob patterns for excluding files and folders in full text searches and quick open
+  "search.exclude": {
+    "**/*.min.js*": true
+  },
+
+  "[typescript]": {
+    "editor.tabSize": 2,
+  },
+
+  // Automatically run the formatter when a Python file is saved
   "[python]": {
     "editor.formatOnSave": true,
   },
+  // Use "black" to automatically format Python files
+  // https://github.com/psf/black
+  "python.formatting.provider": "black",
   "python.linting.pylintEnabled": true,
   "python.linting.enabled": true,
-  "search.exclude": {
-    "**/*.min.js*": true
-  }
+  "files.exclude": {
+    "**/misc/keldon/**": true
+  },
 }

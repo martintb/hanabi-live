@@ -17,7 +17,7 @@ func httpSeed(c *gin.Context) {
 		return
 	}
 
-	// Get all games played on this seed
+	// Get the list of game IDs played on this seed
 	var gameIDs []int
 	if v, err := models.Games.GetGameIDsSeed(seed); err != nil {
 		logger.Error("Failed to get the game IDs from the database for seed \""+seed+"\":", err)
@@ -31,10 +31,11 @@ func httpSeed(c *gin.Context) {
 		gameIDs = v
 	}
 
-	// Get the games corresponding to these IDs
+	// Get the history for these game IDs
+	// (with a custom sort by score)
 	var gameHistoryList []*GameHistory
-	if v, err := models.Games.GetHistory(gameIDs); err != nil {
-		logger.Error("Failed to get the games from the database:", err)
+	if v, err := models.Games.GetHistoryCustomSort(gameIDs, SeedSort); err != nil {
+		logger.Error("Failed to get the history:", err)
 		http.Error(
 			w,
 			http.StatusText(http.StatusInternalServerError),
@@ -50,9 +51,8 @@ func httpSeed(c *gin.Context) {
 		return
 	}
 
-	data := HistoryData{
+	data := TemplateData{
 		Title:        "History",
-		Dev:          false,
 		History:      gameHistoryList,
 		NamesTitle:   "seed: " + seed,
 		SpecificSeed: true,

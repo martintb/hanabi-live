@@ -1,20 +1,122 @@
+import CardIdentity from './CardIdentity';
+import ClientAction from './ClientAction';
+import EndCondition from './EndCondition';
 import MsgClue from './MsgClue';
-import { SimpleCard } from './SimpleCard';
+import Spectator from './Spectator';
 
 export type Action =
-| ActionClue
-| ActionDeckOrder
-| ActionDiscard
-| ActionDraw
-| ActionPlay
-| ActionReorder
-| ActionStackDirections
-| ActionStatus
-| ActionStrike
-| ActionText
-| ActionTurn;
+  | ActionInit
+  | ActionListReceived
+  | GameAction
+  | ReplayAction
+  | ActionCardIdentities
+  | ActionPremove
+  | ActionPause
+  | ActionPauseQueue
+  | ActionSpectators
+  | ActionFinishOngoingGame;
 
-export type ActionIncludingHypothetical = Action | ActionReveal;
+export type GameAction =
+  | ActionCardIdentity
+  | ActionClue
+  | ActionDiscard
+  | ActionDraw
+  | ActionGameOver
+  | ActionPlay
+  | ActionPlayerTimes
+  | ActionStrike
+  | ActionTurn;
+
+export type ActionIncludingHypothetical = GameAction | ActionHypotheticalMorph;
+
+export type ReplayAction =
+  | ActionReplayEnter
+  | ActionReplayExit
+  | ActionReplaySegment
+  | ActionReplaySharedSegment
+  | ActionReplayUseSharedSegments
+  | ActionReplayLeader
+  | HypotheticalAction;
+
+export type HypotheticalAction =
+  | ActionHypotheticalStart
+  | ActionHypotheticalEnd
+  | ActionHypotheticalAction
+  | ActionHypotheticalBack
+  | ActionHypotheticalDrawnCardsShown;
+
+// ----------------------
+// Initialization actions
+// ----------------------
+
+export interface ActionInit {
+  type: 'init';
+  datetimeStarted: string;
+  datetimeFinished: string;
+  spectating: boolean;
+  replay: boolean; // True if either a dedicated solo replay or a shared replay
+  sharedReplay: boolean;
+  databaseID: number;
+  sharedReplaySegment: number;
+  sharedReplayLeader: string;
+  paused: boolean;
+  pausePlayerIndex: number;
+}
+
+export interface ActionListReceived {
+  type: 'gameActionList';
+  readonly actions: GameAction[];
+}
+
+// ---------------------
+// Miscellaneous actions
+// ---------------------
+
+export interface ActionCardIdentities {
+  type: 'cardIdentities';
+  readonly cardIdentities: CardIdentity[];
+}
+
+export interface ActionPremove {
+  type: 'premove';
+  readonly premove: ClientAction | null;
+}
+
+export interface ActionPause {
+  type: 'pause';
+  active: boolean;
+  playerIndex: number;
+}
+
+export interface ActionPauseQueue {
+  type: 'pauseQueue';
+  queued: boolean;
+}
+
+export interface ActionSpectators {
+  type: 'spectators';
+  spectators: Spectator[];
+}
+
+export interface ActionFinishOngoingGame {
+  type: 'finishOngoingGame';
+  databaseID: number;
+  sharedReplayLeader: string;
+  datetimeFinished: string;
+}
+
+// ------------
+// Game actions
+// ------------
+
+// Used to implement the "Slow-Witted" detrimental character
+export interface ActionCardIdentity {
+  type: 'cardIdentity';
+  readonly playerIndex: number;
+  readonly order: number;
+  readonly suitIndex: number;
+  readonly rank: number;
+}
 
 export interface ActionClue {
   type: 'clue';
@@ -22,42 +124,44 @@ export interface ActionClue {
   readonly giver: number;
   readonly list: number[];
   readonly target: number;
-  readonly turn: number;
-}
-
-export interface ActionDeckOrder {
-  type: 'deckOrder';
-  readonly deck: SimpleCard[];
+  readonly turn: number; // TODO: remove. This is unused
 }
 
 export interface ActionDiscard {
   type: 'discard';
   readonly failed: boolean;
-  readonly which: Which;
+  readonly playerIndex: number;
+  readonly order: number;
+  readonly suitIndex: number;
+  readonly rank: number;
 }
 
 export interface ActionDraw {
   type: 'draw';
-  readonly who: number;
-  readonly rank: number;
-  readonly suit: number;
+  readonly playerIndex: number;
   readonly order: number;
+  readonly suitIndex: number;
+  readonly rank: number;
+}
+
+export interface ActionGameOver {
+  type: 'gameOver';
+  readonly endCondition: EndCondition;
+  readonly playerIndex: number;
 }
 
 export interface ActionPlay {
   type: 'play';
-  readonly which: Which;
+  readonly playerIndex: number;
+  readonly order: number;
+  readonly suitIndex: number;
+  readonly rank: number;
 }
 
-export interface ActionReorder {
-  type: 'reorder';
-  readonly target: number;
-  readonly handOrder: number[];
-}
-
-export interface ActionStackDirections {
-  type: 'stackDirections';
-  readonly directions: number[];
+export interface ActionPlayerTimes {
+  type: 'playerTimes';
+  readonly playerTimes: number[];
+  readonly duration: number;
 }
 
 export interface ActionStatus {
@@ -75,28 +179,76 @@ export interface ActionStrike {
   readonly turn: number;
 }
 
-export interface ActionText {
-  type: 'text';
-  readonly text: string;
-}
-
 export interface ActionTurn {
   type: 'turn';
   readonly num: number;
-  readonly who: number;
+  readonly currentPlayerIndex: number;
 }
 
-export interface Which {
-  readonly index: number;
-  readonly suit: number;
+// --------------
+// Replay actions
+// --------------
+
+export interface ActionReplayEnter {
+  type: 'replayEnter';
+  segment: number;
+}
+
+export interface ActionReplayExit {
+  type: 'replayExit';
+}
+
+export interface ActionReplaySegment {
+  type: 'replaySegment';
+  readonly segment: number;
+}
+
+export interface ActionReplaySharedSegment {
+  type: 'replaySharedSegment';
+  readonly segment: number;
+}
+
+export interface ActionReplayUseSharedSegments {
+  type: 'replayUseSharedSegments';
+  readonly useSharedSegments: boolean;
+}
+
+export interface ActionReplayLeader {
+  type: 'replayLeader';
+  readonly name: string;
+}
+
+// --------------------
+// Hypothetical actions
+// --------------------
+
+export interface ActionHypotheticalStart {
+  type: 'hypoStart';
+  readonly drawnCardsShown: boolean;
+  readonly actions: ActionIncludingHypothetical[];
+}
+
+export interface ActionHypotheticalEnd {
+  type: 'hypoEnd';
+}
+
+export interface ActionHypotheticalAction {
+  type: 'hypoAction';
+  readonly action: ActionIncludingHypothetical;
+}
+
+export interface ActionHypotheticalBack {
+  type: 'hypoBack';
+}
+
+export interface ActionHypotheticalMorph {
+  type: 'morph'; // This is not "hypoMorph" because it is a game action
+  readonly suitIndex: number;
   readonly rank: number;
   readonly order: number;
 }
 
-// Hypothetical only
-export interface ActionReveal {
-  type: 'reveal';
-  suit: number;
-  rank: number;
-  order: number;
+export interface ActionHypotheticalDrawnCardsShown {
+  type: 'hypoDrawnCardsShown';
+  readonly drawnCardsShown: boolean;
 }

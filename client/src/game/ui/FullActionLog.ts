@@ -1,15 +1,20 @@
-// Imports
 import Konva from 'konva';
-import FitText from './FitText';
+import { ContainerConfig } from 'konva/types/Container';
+import FitText from './controls/FitText';
 import globals from './globals';
 import MultiFitText from './MultiFitText';
 
 export default class FullActionLog extends Konva.Group {
-  logText: MultiFitText;
-  logNumbers: MultiFitText;
+  buffer: Array<{turnNum: number; text: string}> = [];
+  logText: MultiFitText | null = null;
+  logNumbers: MultiFitText | null = null;
   playerLogEmptyMessage: FitText;
-  playerLogs: MultiFitText[] = [];
-  playerLogNumbers: MultiFitText[] = [];
+  private playerLogs: Array<MultiFitText | null> = [];
+  private playerLogNumbers: Array<MultiFitText | null> = [];
+  private needsRefresh: boolean = false;
+  private numbersOptions: ContainerConfig;
+  private maxLines: number = 38;
+  private textOptions: ContainerConfig;
 
   constructor(winW: number, winH: number) {
     super({
@@ -22,6 +27,7 @@ export default class FullActionLog extends Konva.Group {
       clipWidth: 0.4 * winW,
       clipHeight: 0.96 * winH,
       visible: false,
+      listening: false,
     });
 
     // The black background
@@ -33,13 +39,12 @@ export default class FullActionLog extends Konva.Group {
       fill: 'black',
       opacity: 0.9,
       cornerRadius: 0.01 * winW,
+      listening: false,
     });
     Konva.Group.prototype.add.call(this, rect);
 
-    const maxLines = 38;
-
     // The text for each action
-    const textOptions = {
+    this.textOptions = {
       fontSize: 0.025 * winH,
       fontFamily: 'Verdana',
       fill: 'white',
@@ -47,12 +52,11 @@ export default class FullActionLog extends Konva.Group {
       y: 0.01 * winH,
       width: 0.35 * winW,
       height: 0.94 * winH,
+      listening: false,
     };
-    this.logText = new MultiFitText(textOptions, maxLines);
-    this.add(this.logText as any);
 
     // The turn numbers for each action
-    const numbersOptions = {
+    this.numbersOptions = {
       fontSize: 0.025 * winH,
       fontFamily: 'Verdana',
       fill: '#d3d3d3', // Light gray
@@ -60,9 +64,8 @@ export default class FullActionLog extends Konva.Group {
       y: 0.01 * winH,
       width: 0.03 * winW,
       height: 0.94 * winH,
+      listening: false,
     };
-    this.logNumbers = new MultiFitText(numbersOptions, maxLines);
-    this.add(this.logNumbers as any);
 
     // The text displayed when the selected player hasn't taken any actions
     const emptyMessageOptions = {
@@ -73,57 +76,56 @@ export default class FullActionLog extends Konva.Group {
       y: 0.01 * winH,
       width: 0.35 * winW,
       height: 0.94 * winH,
+      listening: false,
     };
     this.playerLogEmptyMessage = new FitText(emptyMessageOptions);
     this.playerLogEmptyMessage.fitText('This player has not taken any actions yet.');
     this.playerLogEmptyMessage.hide();
     this.add(this.playerLogEmptyMessage as any);
 
-    for (let i = 0; i < globals.playerNames.length; i++) {
-      const playerLog = new MultiFitText(textOptions, maxLines);
-      playerLog.hide();
-      this.playerLogs.push(playerLog);
-      this.add(playerLog as any);
-
-      const playerLogNumber = new MultiFitText(numbersOptions, maxLines);
-      playerLogNumber.hide();
-      this.playerLogNumbers.push(playerLogNumber);
-      this.add(playerLogNumber as any);
+    for (let i = 0; i < globals.options.numPlayers; i++) {
+      this.playerLogs.push(null);
+      this.playerLogNumbers.push(null);
     }
   }
 
-  addMessage(msg: string) {
-    const appendLine = (log: MultiFitText, numbers: MultiFitText, line: string) => {
-      log.setMultiText(line);
-      numbers.setMultiText((globals.turn + 1).toString());
-    };
+  addMessage(turn: number, msg: string) {
+    this.buffer.push({ turnNum: turn, text: msg });
+    this.needsRefresh = true;
 
-    appendLine(this.logText, this.logNumbers, msg);
-    for (let i = 0; i < globals.playerNames.length; i++) {
-      if (msg.startsWith(globals.playerNames[i])) {
-        appendLine(this.playerLogs[i], this.playerLogNumbers[i], msg);
-        break;
-      }
+    // If the log is already open, apply the change immediately
+    if (this.isVisible()) {
+      this.refreshText();
     }
+  }
+
+  // Overrides the Konva show() method to refresh the text as well
+  show() {
+    // We only need to refresh the text when it is shown
+    if (this.needsRefresh) {
+      this.refreshText();
+    }
+    return super.show();
   }
 
   showPlayerActions(playerName: string) {
-    let playerIndex = -1;
-    for (let i = 0; i < globals.playerNames.length; i++) {
-      if (globals.playerNames[i] === playerName) {
-        playerIndex = i;
-      }
-    }
+    const playerIndex = globals.metadata.playerNames.findIndex((name) => name === playerName);
     if (playerIndex === -1) {
       throw new Error(`Failed to find player "${playerName}" in the player names.`);
     }
-    this.logText.hide();
-    this.logNumbers.hide();
-    if (this.playerLogs[playerIndex].isEmpty()) {
+
+    if (this.needsRefresh) {
+      this.refreshText();
+    }
+
+    this.logText!.hide();
+    this.logNumbers!.hide();
+
+    if (this.playerLogs[playerIndex] === null) {
       this.playerLogEmptyMessage.show();
     } else {
-      this.playerLogs[playerIndex].show();
-      this.playerLogNumbers[playerIndex].show();
+      this.playerLogs[playerIndex]!.show();
+      this.playerLogNumbers[playerIndex]!.show();
     }
 
     this.show();
@@ -140,32 +142,87 @@ export default class FullActionLog extends Konva.Group {
       }
       globals.elements.stageFade.off('click tap');
       this.playerLogEmptyMessage.hide();
-      this.playerLogs[playerIndex].hide();
-      this.playerLogNumbers[playerIndex].hide();
+      this.playerLogs[playerIndex]?.hide();
+      this.playerLogNumbers[playerIndex]?.hide();
 
-      this.logText.show();
-      this.logNumbers.show();
+      if (this.logText === null || this.logNumbers === null) {
+        this.makeLog();
+      }
+
+      this.logText!.show();
+      this.logNumbers!.show();
       this.hide();
       globals.elements.stageFade.hide();
+
       globals.layers.UI2.batchDraw();
     });
   }
 
-  refreshText() {
-    this.logText.refreshText();
-    this.logNumbers.refreshText();
-    for (let i = 0; i < globals.playerNames.length; i++) {
-      this.playerLogs[i].refreshText();
-      this.playerLogNumbers[i].refreshText();
+  private makeLog() {
+    this.logText = new MultiFitText(this.textOptions, this.maxLines);
+    this.add(this.logText as any);
+    this.logNumbers = new MultiFitText(this.numbersOptions, this.maxLines);
+    this.add(this.logNumbers as any);
+  }
+
+  private makePlayerLog(i: number) {
+    const playerLog = new MultiFitText(this.textOptions, this.maxLines);
+    playerLog.hide();
+    this.playerLogs[i] = playerLog;
+    this.add(playerLog as any);
+
+    const playerLogNumber = new MultiFitText(this.numbersOptions, this.maxLines);
+    playerLogNumber.hide();
+    this.playerLogNumbers[i] = playerLogNumber;
+    this.add(playerLogNumber as any);
+  }
+
+  private refreshText() {
+    const appendLine = (log: MultiFitText, numbers: MultiFitText, turn: number, line: string) => {
+      log.setMultiText(line);
+      numbers.setMultiText(turn.toString());
+    };
+
+    if (this.logText === null || this.logNumbers === null) {
+      this.makeLog();
     }
+
+    this.buffer.forEach((logEntry) => {
+      appendLine(this.logText!, this.logNumbers!, logEntry.turnNum, logEntry.text);
+      for (let i = 0; i < globals.options.numPlayers; i++) {
+        if (logEntry.text.startsWith(globals.metadata.playerNames[i])) {
+          if (this.playerLogs[i] === null) {
+            this.makePlayerLog(i);
+          }
+          appendLine(
+            this.playerLogs[i]!,
+            this.playerLogNumbers[i]!,
+            logEntry.turnNum,
+            logEntry.text,
+          );
+          break;
+        }
+      }
+    });
+
+    this.logText!.refreshText();
+    this.logNumbers!.refreshText();
+    for (let i = 0; i < globals.options.numPlayers; i++) {
+      this.playerLogs[i]?.refreshText();
+      this.playerLogNumbers[i]?.refreshText();
+    }
+    this.buffer = [];
+    this.needsRefresh = false;
   }
 
   reset() {
-    this.logText.reset();
-    this.logNumbers.reset();
-    for (let i = 0; i < globals.playerNames.length; i++) {
-      this.playerLogs[i].reset();
-      this.playerLogNumbers[i].reset();
+    this.buffer = [];
+    this.logText?.reset();
+    this.logNumbers?.reset();
+    for (let i = 0; i < globals.options.numPlayers; i++) {
+      this.playerLogs[i]?.reset();
+      this.playerLogNumbers[i]?.reset();
     }
+    this.needsRefresh = true;
   }
 }

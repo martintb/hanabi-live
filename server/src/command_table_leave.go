@@ -12,18 +12,12 @@ import (
 //   tableID: 5,
 // }
 func commandTableLeave(s *Session, d *CommandData) {
-	/*
-		Validation
-	*/
-
-	// Validate that the table exists
-	tableID := d.TableID
-	var t *Table
-	if v, ok := tables[tableID]; !ok {
-		s.Warning("Table " + strconv.Itoa(tableID) + " does not exist.")
+	t, exists := getTableAndLock(s, d.TableID, !d.NoLock)
+	if !exists {
 		return
-	} else {
-		t = v
+	}
+	if !d.NoLock {
+		defer t.Mutex.Unlock()
 	}
 
 	// Validate that the game has not started
@@ -39,32 +33,39 @@ func commandTableLeave(s *Session, d *CommandData) {
 	}
 
 	// Validate that they are at the table
-	i := t.GetPlayerIndexFromID(s.UserID())
-	if i == -1 {
-		s.Warning("You are not at table " + strconv.Itoa(tableID) + ", so you cannot leave it.")
+	playerIndex := t.GetPlayerIndexFromID(s.UserID())
+	if playerIndex == -1 {
+		s.Warning("You are not at table " + strconv.FormatUint(t.ID, 10) + ", " +
+			"so you cannot leave it.")
 		return
 	}
 
-	/*
-		Leave
-	*/
+	tableLeave(s, t, playerIndex)
+}
 
+func tableLeave(s *Session, t *Table, playerIndex int) {
 	logger.Info(t.GetName() + "User \"" + s.Username() + "\" left. " +
 		"(There are now " + strconv.Itoa(len(t.Players)-1) + " players.)")
 
 	// Remove the player
-	t.Players = append(t.Players[:i], t.Players[i+1:]...)
+	t.Players = append(t.Players[:playerIndex], t.Players[playerIndex+1:]...)
 	notifyAllTable(t)
 	t.NotifyPlayerChange()
 
 	// Set their status
 	if s != nil {
 		s.Set("status", StatusLobby)
+		s.Set("tableID", uint64(0))
 		notifyAllUser(s)
 	}
 
 	// Make the client switch screens to show the base lobby
-	s.Emit("left", nil)
+	type TableLeftMessage struct {
+		TableID uint64
+	}
+	s.Emit("left", &TableLeftMessage{
+		TableID: t.ID,
+	})
 
 	// If they were typing, remove the message
 	t.NotifyChatTyping(s.Username(), false)
@@ -72,8 +73,7 @@ func commandTableLeave(s *Session, d *CommandData) {
 	// If there is an automatic start countdown, cancel it
 	if !t.DatetimePlannedStart.IsZero() {
 		t.DatetimePlannedStart = time.Time{} // Assign a zero value
-		room := "table" + strconv.Itoa(t.ID)
-		chatServerSend("Automatic game start has been canceled.", room)
+		chatServerSend("Automatic game start has been canceled.", t.GetRoomName())
 	}
 
 	// Force everyone else to leave if it was the owner that left
@@ -88,17 +88,18 @@ func commandTableLeave(s *Session, d *CommandData) {
 				s2 = newFakeSession(p.ID, p.Name)
 				logger.Info("Created a new fake session in the \"commandTableLeave()\" function.")
 			}
-			commandTableLeave(s2, &CommandData{
+			commandTableLeave(s2, &CommandData{ // Manual invocation
 				TableID: t.ID,
+				NoLock:  true,
 			})
 		}
 		return
 	}
 
+	// If this is the last person to leave, delete the game
 	if len(t.Players) == 0 {
-		// Delete the game if this is the last person to leave
-		delete(tables, tableID)
-		notifyAllTableGone(t)
+		deleteTable(t)
+		logger.Info("Ended pre-game table #" + strconv.FormatUint(t.ID, 10) + " because everyone left.")
 		return
 	}
 }

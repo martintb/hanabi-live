@@ -1,36 +1,33 @@
 // This is one of the entries in the clue log (in the top-right-hand corner of the UI)
 
-// Imports
 import Konva from 'konva';
-import drawLayer from './drawLayer';
-import FitText from './FitText';
+import { cluesRules } from '../rules';
+import { StateClue } from '../types/GameState';
+import FitText from './controls/FitText';
 import globals from './globals';
-import HanabiCard from './HanabiCard';
+import { drawLayer } from './konvaHelpers';
 import * as replay from './replay';
 
 export default class ClueEntry extends Konva.Group {
-  list: number[];
-  negativeList: number[];
-  turn: number;
+  clue: StateClue;
 
   background: Konva.Rect;
   negativeMarker: Konva.Text;
 
-  constructor(config: Konva.ContainerConfig) {
+  constructor(clue: StateClue, config: Konva.ContainerConfig) {
     super(config);
+
+    this.clue = clue;
 
     // Object variables
     const w = config.width;
-    if (typeof w === 'undefined') {
+    if (w === undefined) {
       throw new Error('ClueEntry was not provided with a "w" value.');
     }
     const h = config.height;
-    if (typeof h === 'undefined') {
+    if (h === undefined) {
       throw new Error('ClueEntry was not provided with a "h" value.');
     }
-    this.list = config.list as number[];
-    this.negativeList = config.negativeList as number[];
-    this.turn = config.turn as number;
 
     this.background = new Konva.Rect({
       x: 0,
@@ -51,7 +48,9 @@ export default class ClueEntry extends Konva.Group {
       fontSize: 0.9 * h,
       fontFamily: 'Verdana',
       fill: 'white',
-      text: config.giver as string | undefined,
+      text: globals.metadata.playerNames[clue.giver],
+      verticalAlign: 'middle',
+      listening: false,
     });
     this.add(giver);
 
@@ -63,10 +62,13 @@ export default class ClueEntry extends Konva.Group {
       fontSize: 0.9 * h,
       fontFamily: 'Verdana',
       fill: 'white',
-      text: config.target as string | undefined,
+      text: globals.metadata.playerNames[clue.target],
+      verticalAlign: 'middle',
+      listening: false,
     });
     this.add(target);
 
+    const characterID = globals.metadata.characterAssignments[clue.giver];
     const name = new Konva.Text({
       x: 0.75 * w,
       y: 0,
@@ -76,7 +78,9 @@ export default class ClueEntry extends Konva.Group {
       fontSize: 0.9 * h,
       fontFamily: 'Verdana',
       fill: 'white',
-      text: config.clueName as string | undefined,
+      text: cluesRules.getClueName(clue.type, clue.value, globals.variant, characterID),
+      verticalAlign: 'middle',
+      listening: false,
     });
     this.add(name);
 
@@ -91,13 +95,12 @@ export default class ClueEntry extends Konva.Group {
       fill: 'white',
       text: '✘',
       visible: false,
+      listening: false,
     });
     this.add(this.negativeMarker);
 
     // Add a mouseover highlighting effect
     this.background.on('mouseover', () => {
-      globals.elements.clueLog!.showMatches(null);
-
       this.background.opacity(0.4);
       drawLayer(this);
     });
@@ -106,30 +109,38 @@ export default class ClueEntry extends Konva.Group {
       drawLayer(this);
     });
 
-    // Click an entry in the clue log to go to that turn in the replay
-    this.background.on('click', () => {
-      replay.clueLogClickHandler(this.turn);
+    // Click an entry in the clue log to go to that segment (turn) in the replay
+    this.background.on('click tap', () => {
+      replay.goToSegment(this.clue.segment + 1, true);
     });
   }
 
-  showMatch(target: HanabiCard | null) {
+  // If this clue entry is related to the card that we are currently mousing over, then highlight it
+  showMatch(targetCardOrder: number | null) {
     this.background.opacity(0.1);
     this.background.fill('white');
     this.negativeMarker.hide();
 
-    for (let i = 0; i < this.list.length; i++) {
-      if (globals.deck[this.list[i]] === target) {
+    if (targetCardOrder === null) {
+      return;
+    }
+
+    for (const cardOrder of this.clue.list) {
+      if (cardOrder === targetCardOrder) {
         this.background.opacity(0.4);
+        // (the background is already set to white)
+        return;
       }
     }
 
-    for (let i = 0; i < this.negativeList.length; i++) {
-      if (globals.deck[this.negativeList[i]] === target) {
+    for (const cardOrder of this.clue.negativeList) {
+      if (cardOrder === targetCardOrder) {
         this.background.opacity(0.4);
         this.background.fill('#ff7777');
         if (globals.lobby.settings.colorblindMode) {
           this.negativeMarker.show();
         }
+        return;
       }
     }
   }

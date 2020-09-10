@@ -92,18 +92,22 @@ func main() {
 	cmd.Stderr = os.Stderr
 	cmd.Stdout = os.Stdout
 	cmd.Stdin = os.Stdin
-	cmd.Start()
-	cmd.Wait()
+	if err := cmd.Start(); err != nil {
+		logger.Fatal("failed to start")
+	}
+	if err := cmd.Wait(); err != nil {
+		logger.Fatal("failed to wait")
+	}
 }
 
-// writeEnvFile writes the hanab-live configuration file to disk
+// writeEnvFile writes the hanabi-live configuration file to disk
 // all supported parameters are read from the environment
 // other parameters (such as the port) are hard-coded
 func writeEnvFile() (err error) {
 	envfile := `
 ` + writeOptionalVariable("DOMAIN") + `
 PORT=8080
-	
+
 ` + writeOptionalVariable("SESSION_SECRET") + `
 
 # variables with some default values
@@ -121,7 +125,7 @@ DB_NAME="` + dbName + `"
 ` + writeOptionalVariable("GA_TRACKING_ID") + `
 ` + writeOptionalVariable("SENTRY_DSN") + `
 
-# ssl isn't supported at the moment, as it's much easier to just do this in docker with a seperate proxy
+# ssl isn't supported at the moment, as it's much easier to just do this in docker with a separate proxy
 TLS_CERT_FILE=
 TLS_KEY_FILE=
 `
@@ -130,17 +134,17 @@ TLS_KEY_FILE=
 	// and return it
 	err = ioutil.WriteFile(envFileLocation, []byte(envfile), 0)
 	if err != nil {
-		logger.Errorf("Unable to write env file: %s", err.Error())
+		logger.Errorf("Failed to write env file: %s", err.Error())
 	}
 	return
 }
 
-// waitForDatabase repreatedly attempts to connect to the sql server until a connection is established
+// waitForDatabase repeatedly attempts to connect to the sql server until a connection is established
 // will retry the connection dbConnectRetries times, waiting dbConnectRetryDelay between each attempt
 func waitForDatabase() (err error) {
 	err = connectAndPing()
 	for err != nil {
-		logger.Infof("Unable to connect to database: %s, %d retries left. ", err.Error(), dbConnectRetries)
+		logger.Infof("Failed to connect to database: %s, %d retries left. ", err.Error(), dbConnectRetries)
 		dbConnectRetries--
 		if dbConnectRetries == 0 {
 			return
@@ -165,7 +169,7 @@ func connectAndPing() (err error) {
 	}
 	defer db.Close()
 
-	// ping the databse
+	// ping the database
 	if err = db.Ping(); err != nil {
 		return err
 	}

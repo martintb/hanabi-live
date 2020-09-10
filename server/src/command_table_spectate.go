@@ -1,9 +1,5 @@
 package main
 
-import (
-	"strconv"
-)
-
 // commandTableSpectate is sent when:
 // 1) the user clicks on the "Spectate" button in the lobby
 // 2) the user creates a solo replay
@@ -13,64 +9,67 @@ import (
 // Example data:
 // {
 //   tableID: 15103,
-//   // If the player is specified, they will spectate from that player's perspective
-//   player: 'Alice', // Optional
+//   // A value of "-1" must be specified if we do not want to shadow a player
+//   shadowingPlayerIndex: -1,
 // }
 func commandTableSpectate(s *Session, d *CommandData) {
-	/*
-		Validation
-	*/
-
-	// Validate that the table exists
-	tableID := d.TableID
-	var t *Table
-	if v, ok := tables[tableID]; !ok {
-		s.Warning("Table " + strconv.Itoa(tableID) + " does not exist.")
+	t, exists := getTableAndLock(s, d.TableID, !d.NoLock)
+	if !exists {
 		return
-	} else {
-		t = v
 	}
-	g := t.Game
+	if !d.NoLock {
+		defer t.Mutex.Unlock()
+	}
 
 	// Validate that the game has started
 	if !t.Running {
-		s.Warning(ChatCommandNotStartedFail)
+		s.Warning(NotStartedFail)
 		return
 	}
 
-	// Validate that they are not already spectating a game
-	for _, t2 := range tables {
-		for _, sp := range t2.Spectators {
-			if sp.ID == s.UserID() {
-				if t2.ID == t.ID {
-					s.Warning("You are already spectating this table.")
-				} else {
-					s.Warning("You are already spectating another table.")
-				}
-				return
-			}
-		}
-	}
-
-	// Validate the player name
-	// (if provided, they want to spectate from a specific player's perspective)
-	playerIndex := -1
-	if d.Player != "" {
-		for i, p := range t.Players {
-			if p.Name == d.Player {
-				playerIndex = i
-				break
-			}
-		}
-		if playerIndex == -1 {
-			s.Warning("That is an invalid player name.")
+	// Validate that they are not already spectating this table
+	for _, sp := range t.Spectators {
+		if sp.ID == s.UserID() {
+			s.Warning("You are already spectating this table.")
 			return
 		}
 	}
 
-	/*
-		Spectate / Join Solo Replay / Join Shared Replay
-	*/
+	// Validate that they are not already spectating another table
+	alreadySpectating := false
+	tablesMutex.RLock()
+	for _, t2 := range tables {
+		for _, sp := range t2.Spectators {
+			if sp.ID == s.UserID() {
+				alreadySpectating = true
+				break
+			}
+		}
+		if alreadySpectating {
+			break
+		}
+	}
+	tablesMutex.RUnlock()
+	if alreadySpectating {
+		s.Warning("You are already spectating another table.")
+		return
+	}
+
+	// Validate the shadowing player index
+	// (if provided, they want to spectate from a specific player's perspective)
+	if d.ShadowingPlayerIndex != -1 {
+		if d.ShadowingPlayerIndex < 0 || d.ShadowingPlayerIndex > len(t.Players)-1 {
+			s.Warning("That is an invalid player index to shadow.")
+			return
+		}
+	}
+
+	tableSpectate(s, d, t)
+}
+
+func tableSpectate(s *Session, d *CommandData, t *Table) {
+	// Local variables
+	g := t.Game
 
 	if t.Replay {
 		logger.Info(t.GetName() + "User \"" + s.Username() + "\" joined the replay.")
@@ -80,13 +79,11 @@ func commandTableSpectate(s *Session, d *CommandData) {
 
 	// Add them to the spectators object
 	sp := &Spectator{
-		ID:          s.UserID(),
-		Name:        s.Username(),
-		Session:     s,
-		Shadowing:   playerIndex != -1,
-		PlayerIndex: playerIndex,
-		// There are notes for every card in the deck + the stack bases for each suit
-		Notes: make([]string, len(g.Deck)+len(variants[t.Options.Variant].Suits)),
+		ID:                   s.UserID(),
+		Name:                 s.Username(),
+		Session:              s,
+		ShadowingPlayerIndex: d.ShadowingPlayerIndex,
+		Notes:                make([]string, g.GetNotesSize()),
 	}
 	t.Spectators = append(t.Spectators, sp)
 	notifyAllTable(t)    // Update the spectator list for the row in the lobby
@@ -94,15 +91,18 @@ func commandTableSpectate(s *Session, d *CommandData) {
 
 	// Set their status
 	status := StatusSpectating
+	tableID := t.ID
 	if t.Replay {
 		if t.Visible {
 			status = StatusSharedReplay
 		} else {
 			status = StatusReplay
+			tableID = 0 // Protect the privacy of a user in a solo replay
 		}
 	}
 	if s != nil {
 		s.Set("status", status)
+		s.Set("tableID", tableID)
 		notifyAllUser(s)
 	}
 

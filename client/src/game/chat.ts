@@ -1,9 +1,9 @@
 // In-game chat
 
-// Imports
 import interact from 'interactjs';
 import { FADE_TIME } from '../constants';
 import globals from '../globals';
+import { parseIntSafe } from '../misc';
 
 export const init = () => {
   // Make the chat modal draggable (using the InteractJS library)
@@ -23,8 +23,8 @@ export const init = () => {
       onmove: (event: Interact.InteractEvent) => {
         // Get the new position based on the delta between the event and the old position
         // (which is conveniently stored in the "data-x" and "data-y" attributes)
-        const x = (parseFloat(event.target.getAttribute('data-x') as string) || 0) + event.dx;
-        const y = (parseFloat(event.target.getAttribute('data-y') as string) || 0) + event.dy;
+        const x = (Number(event.target.getAttribute('data-x')) || 0) + event.dx;
+        const y = (Number(event.target.getAttribute('data-y')) || 0) + event.dy;
 
         // Move it
         const element = $(`#${event.target.id}`);
@@ -64,8 +64,8 @@ export const init = () => {
     .on('resizemove', (event: Interact.ResizeEvent) => {
       // Get the new position based on the delta between the event and the old position
       // (which is conveniently stored in the "data-x" and "data-y" attributes)
-      let x = parseFloat(event.target.getAttribute('data-x') as string) || 0;
-      let y = parseFloat(event.target.getAttribute('data-y') as string) || 0;
+      let x = Number(event.target.getAttribute('data-x')) || 0;
+      let y = Number(event.target.getAttribute('data-y')) || 0;
 
       // Translate when resizing from top or left edges
       x += event.deltaRect!.left;
@@ -86,9 +86,9 @@ export const init = () => {
       localStorage.setItem('chatWindowWidth', event.target.style.width);
       localStorage.setItem('chatWindowHeight', event.target.style.height);
       const chatElement = $(`#${event.target.id}`);
-      if (chatElement) {
-        localStorage.setItem('chatWindowX', chatElement.attr('data-x') || '0');
-        localStorage.setItem('chatWindowY', chatElement.attr('data-y') || '0');
+      if (chatElement !== undefined) {
+        localStorage.setItem('chatWindowX', chatElement.attr('data-x') ?? '0');
+        localStorage.setItem('chatWindowY', chatElement.attr('data-y') ?? '0');
       } else {
         throw new Error(`Failed to get the "${event.target.id}" element.`);
       }
@@ -155,7 +155,7 @@ export const show = () => {
     resetPosition = false;
     modal.css('width', width);
     modal.css('height', height);
-    moveElement(modal, parseInt(x, 10), parseInt(y, 10));
+    moveElement(modal, parseIntSafe(x), parseIntSafe(y));
 
     // Just in case,
     // reset the size and position if the stored location puts the chat box offscreen
@@ -190,7 +190,7 @@ export const hide = () => {
 };
 
 // Subroutine to move an element (using the "transform" CSS property)
-function moveElement(element: JQuery, x: number, y: number) {
+const moveElement = (element: JQuery, x: number, y: number) => {
   // Update the element's style
   const transform = `translate(${x}px, ${y}px)`;
   element.css('webkitTransform', transform);
@@ -199,4 +199,4 @@ function moveElement(element: JQuery, x: number, y: number) {
   // Keep the dragged position in the "data-x" & "data-y" attributes
   element.attr('data-x', x);
   element.attr('data-y', y);
-}
+};

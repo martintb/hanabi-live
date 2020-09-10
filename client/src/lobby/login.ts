@@ -1,12 +1,13 @@
 // The initial login page
 
-// Imports
 import version from '../../../data/version.json';
 import { FADE_TIME } from '../constants';
 import globals from '../globals';
+import { isEmpty, parseIntSafe } from '../misc';
 import websocketInit from '../websocketInit';
 import * as nav from './nav';
 import tablesDraw from './tablesDraw';
+import Screen from './types/Screen';
 import * as usersDraw from './usersDraw';
 
 export const init = () => {
@@ -20,6 +21,11 @@ export const init = () => {
     }
   });
   $('#login-form').submit(submit);
+
+  $('#firefox-warning-button').click(() => {
+    localStorage.setItem('acceptedFirefoxWarning', 'true');
+    show();
+  });
 };
 
 const submit = (event: JQuery.Event) => {
@@ -27,16 +33,16 @@ const submit = (event: JQuery.Event) => {
   event.preventDefault();
 
   let username = $('#login-username').val();
-  if (!username) {
+  if (isEmpty(username)) {
     formError('You must provide a username.');
     return;
   }
   if (typeof username !== 'string') {
-    username = username.toString();
+    username = username!.toString();
   }
 
   let password = $('#login-password').val();
-  if (!password) {
+  if (isEmpty(password)) {
     formError('You must provide a password.');
     return;
   }
@@ -84,10 +90,10 @@ const send = (username: string, password: string) => {
 
 const getAjaxError = (jqXHR: JQuery.jqXHR<any>) => {
   if (jqXHR.readyState === 0) {
-    return 'A network error occured. The server might be down!';
+    return 'A network error occurred. The server might be down!';
   }
   if (jqXHR.responseText === '') {
-    return 'An unknown error occured.';
+    return 'An unknown error occurred.';
   }
   return jqXHR.responseText;
 };
@@ -103,7 +109,7 @@ export const automaticLogin = () => {
     }
     let testNumber = 1;
     if (testNumberString !== '') {
-      testNumber = parseInt(testNumberString, 10);
+      testNumber = parseIntSafe(testNumberString);
     }
     if (Number.isNaN(testNumber)) {
       testNumber = 1;
@@ -118,6 +124,14 @@ export const automaticLogin = () => {
   // If we have logged in previously and our cookie is still good, automatically login
   console.log('Testing to see if we have a cached WebSocket cookie.');
   fetch('/test-cookie').then((response) => {
+    // Check to see if we have accepted the Firefox warning
+    // (cookies are strings)
+    if (globals.browserIsFirefox && localStorage.getItem('acceptedFirefoxWarning') !== 'true') {
+      $('#loading').hide();
+      $('#firefox-warning').show();
+      return;
+    }
+
     if (response.status === 200) {
       console.log('WebSocket cookie confirmed to be good. Automatically logging in to the WebSocket server.');
       websocketInit();
@@ -129,17 +143,20 @@ export const automaticLogin = () => {
     } else {
       console.log('Received an unknown status back from the server:', response.status);
     }
-
-    // Show the login screen
-    $('#loading').hide();
-    $('#sign-in').show();
-    $('#login-username').focus();
+    show();
   });
 };
 
 // -------------------------
 // Miscellaneous subroutines
 // -------------------------
+
+export const show = () => {
+  $('#loading').hide();
+  $('#firefox-warning').hide();
+  $('#sign-in').show();
+  $('#login-username').focus();
+};
 
 export const hide = (firstTimeUser: boolean) => {
   // Hide the login screen
@@ -155,7 +172,7 @@ export const hide = (firstTimeUser: boolean) => {
   // Even with height and width 100%,
   // the scroll bar can pop up when going back from a game to the lobby
   // It also can show up in-game if a tooltip animates off of the edge of the screen
-  // So we can set "overflow" to explicitly prevent this from occuring
+  // So we can set "overflow" to explicitly prevent this from occurring
   // We don't want to set this in "hanabi.css" because
   // there should be scrolling enabled on the login screen
   // We need to scroll to the top of the screen before disabling the scroll bars
@@ -164,7 +181,7 @@ export const hide = (firstTimeUser: boolean) => {
   $('body').css('overflow', 'hidden');
 
   // Show the lobby
-  globals.currentScreen = 'lobby';
+  globals.currentScreen = Screen.Lobby;
   tablesDraw();
   usersDraw.draw(); // If we were in the tutorial, we have to re-draw all of the user rows
   $('#lobby').show();
@@ -175,7 +192,7 @@ export const hide = (firstTimeUser: boolean) => {
   $('#lobby-chat-input').focus();
 
   // Scroll to the bottom of the chat
-  // (this is necessary if we are getting here after the tutorial)
+  // (this is necessary if we are going to the lobby after the tutorial)
   const chat = $('#lobby-chat-text');
   chat.animate({
     scrollTop: chat[0].scrollHeight,
@@ -183,7 +200,7 @@ export const hide = (firstTimeUser: boolean) => {
 };
 
 export const formError = (msg: string) => {
-  // For some reason this has to be invoked asycnronously in order to work properly
+  // For some reason this has to be invoked asynchronously in order to work properly
   setTimeout(() => {
     $('#login-ajax').hide();
     $('#login-button').removeClass('disabled');
@@ -191,7 +208,7 @@ export const formError = (msg: string) => {
     $('#login-alert').fadeIn(FADE_TIME);
 
     const offset = $('#login-alert').offset();
-    if (typeof offset === 'undefined') {
+    if (offset === undefined) {
       throw new Error('Failed to get the coordinates for the "#login-alert" element.');
     }
     $('html, body').animate({

@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"hash/crc64"
 	"io/ioutil"
 	"math"
 	"math/rand"
@@ -19,14 +20,6 @@ import (
 	"github.com/mozillazg/go-unidecode"
 	"golang.org/x/text/unicode/norm"
 )
-
-// From: https://stackoverflow.com/questions/47341278/how-to-format-a-duration-in-golang
-func durationToString(d time.Duration) string {
-	m := d / time.Minute
-	d -= m * time.Minute
-	s := d / time.Second
-	return fmt.Sprintf("%02d:%02d", m, s)
-}
 
 func executeScript(script string) error {
 	cmd := exec.Command(path.Join(projectPath, script)) // nolint:gosec
@@ -102,7 +95,7 @@ func intInSlice(a int, slice []int) bool {
 }
 
 // From: https://stackoverflow.com/questions/53069040/checking-a-string-contains-only-ascii-characters
-func isPrintableASCII(s string) bool {
+func containsAllPrintableASCII(s string) bool {
 	for i := 0; i < len(s); i++ {
 		if s[i] < 32 || s[i] > 126 { // 32 is " " and 126 is "~"
 			return false
@@ -112,9 +105,7 @@ func isPrintableASCII(s string) bool {
 }
 
 // From: https://stackoverflow.com/questions/38554353/how-to-check-if-a-string-only-contains-alphabetic-characters-in-go
-var isAlphanumeric = regexp.MustCompile(`^[a-zA-Z0-9]+$`).MatchString
 var isAlphanumericHyphen = regexp.MustCompile(`^[a-zA-Z0-9\-]+$`).MatchString
-var isAlphanumericSpacesSafeSpecialCharacters = regexp.MustCompile(`^[a-zA-Z0-9 !@#$\-_=\+;:,\.\?]+$`).MatchString
 
 // From: https://gist.github.com/stoewer/fbe273b711e6a06315d19552dd4d33e6
 var matchFirstCap = regexp.MustCompile("(.)([A-Z][a-z]+)")
@@ -158,6 +149,19 @@ func numConsecutiveDiacritics(s string) int {
 	}
 
 	return maxConsecutive
+}
+
+func removeNonPrintableCharacters(s string) string {
+	return strings.Map(func(r rune) rune {
+		if !unicode.IsPrint(r) {
+			// This character is not printable by Go
+			// https://golang.org/pkg/unicode/#IsPrint
+			// Returning a negative value will drop the character from the string with no
+			// replacement
+			return -1
+		}
+		return r
+	}, s)
 }
 
 func secondsToDurationString(seconds int) (string, error) {
@@ -225,6 +229,16 @@ func secondsToDurationString(seconds int) (string, error) {
 	}
 
 	return msg, nil
+}
+
+// setSeed seeds the random number generator with a string
+// Golang's "rand.Seed()" function takes an int64, so we need to convert a string to an int64
+// We use the CRC64 hash function to do this
+// Also note that seeding with negative numbers will not work
+func setSeed(seed string) {
+	crc64Table := crc64.MakeTable(crc64.ECMA)
+	intSeed := crc64.Checksum([]byte(seed), crc64Table)
+	rand.Seed(int64(intSeed))
 }
 
 func stringInSlice(a string, slice []string) bool {

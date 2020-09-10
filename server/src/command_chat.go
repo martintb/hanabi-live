@@ -1,14 +1,13 @@
 package main
 
 import (
+	"html"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
-
-	"github.com/microcosm-cc/bluemonday"
 )
 
 const (
@@ -17,8 +16,7 @@ const (
 )
 
 var (
-	bluemondayStrictPolicy = bluemonday.StrictPolicy()
-	lobbyRoomRegExp        = regexp.MustCompile(`table(\d+)`)
+	lobbyRoomRegExp = regexp.MustCompile(`table(\d+)`)
 )
 
 // commandChat is sent when the user presses enter after typing a text message
@@ -47,10 +45,6 @@ func commandChat(s *Session, d *CommandData) {
 		d.Username = s.Username()
 	}
 
-	/*
-		Validate
-	*/
-
 	// Check to see if their IP has been muted
 	if s != nil && s.Muted() {
 		s.Warning("You have been muted by an administrator.")
@@ -68,9 +62,8 @@ func commandChat(s *Session, d *CommandData) {
 	// because we do not want to send HTML-escaped text to Discord
 	rawMsg := d.Msg
 
-	// Sanitize the message using the bluemonday library
-	// to stop various attacks against other players
-	d.Msg = bluemondayStrictPolicy.Sanitize(d.Msg)
+	// Escape all HTML special characters (to stop various attacks against other players)
+	d.Msg = html.EscapeString(d.Msg)
 
 	// Validate the room
 	if d.Room != "lobby" && !strings.HasPrefix(d.Room, "table") {
@@ -80,10 +73,10 @@ func commandChat(s *Session, d *CommandData) {
 		return
 	}
 
-	/*
-		Chat
-	*/
+	chat(s, d, userID, rawMsg)
+}
 
+func chat(s *Session, d *CommandData, userID int, rawMsg string) {
 	// Log the message
 	text := "#" + d.Room + " "
 	if d.Username != "" {
@@ -103,7 +96,7 @@ func commandChat(s *Session, d *CommandData) {
 	}
 
 	d.Msg = chatFillMentions(d.Msg) // Convert Discord mentions from number to username
-	d.Msg = chatFillChannels(d.Msg) // Convert Discord channel names from number to username
+	d.Msg = chatFillChannels(d.Msg) // Convert Discord channel links from number to name
 
 	// Add the message to the database
 	if d.Discord {
@@ -122,6 +115,7 @@ func commandChat(s *Session, d *CommandData) {
 
 	// Lobby messages go to everyone
 	if !d.OnlyDiscord {
+		sessionsMutex.RLock()
 		for _, s2 := range sessions {
 			s2.Emit("chat", &ChatMessage{
 				Msg:      d.Msg,
@@ -132,6 +126,7 @@ func commandChat(s *Session, d *CommandData) {
 				Room:     d.Room,
 			})
 		}
+		sessionsMutex.RUnlock()
 	}
 
 	// Don't send Discord messages that we are already replicating
@@ -144,11 +139,8 @@ func commandChat(s *Session, d *CommandData) {
 			rawMsg = strings.ReplaceAll(rawMsg, "@here", "AtHere")
 		}
 
-		// We use "rawMsg" instead of "d.Msg" because we want to send the unsanitized message
-		// The bluemonday library is intended for HTML rendering,
-		// and Discord can handle any special characters
-		// Furthermore, replace some HTML-escaped symbols with their real counterparts
-		rawMsg = strings.ReplaceAll(rawMsg, "&amp;", "&")
+		// We use "rawMsg" instead of "d.Msg" because we want to send the unescaped message
+		// (since Discord can handle escaping HTML special characters itself)
 		discordSend(discordLobbyChannel, d.Username, rawMsg)
 	}
 
@@ -167,8 +159,8 @@ func commandChatTable(s *Session, d *CommandData) {
 		}
 		return
 	}
-	var tableID int
-	if v, err := strconv.Atoi(match[1]); err != nil {
+	var tableID uint64
+	if v, err := strconv.ParseUint(match[1], 10, 64); err != nil {
 		logger.Error("Failed to convert the table ID to a number:", err)
 		if s != nil {
 			s.Error("That is an invalid room.")
@@ -178,28 +170,23 @@ func commandChatTable(s *Session, d *CommandData) {
 		tableID = v
 	}
 
-	// Get the corresponding table
-	var t *Table
-	if v, ok := tables[tableID]; !ok {
-		if s == nil {
-			logger.Error("Table " + strconv.Itoa(tableID) + " does not exist.")
-		} else {
-			s.Warning("Table " + strconv.Itoa(tableID) + " does not exist.")
-		}
+	t, exists := getTableAndLock(s, tableID, !d.NoLock)
+	if !exists {
 		return
-	} else {
-		t = v
+	}
+	if !d.NoLock {
+		defer t.Mutex.Unlock()
 	}
 
 	// Validate that this player is in the game or spectating
-	var i int
-	var j int
+	var playerIndex int
+	var spectatorIndex int
 	if !d.Server {
-		i = t.GetPlayerIndexFromID(s.UserID())
-		j = t.GetSpectatorIndexFromID(s.UserID())
-		if i == -1 && j == -1 {
-			s.Warning("You are not playing or spectating at table " + strconv.Itoa(tableID) + ", " +
-				"so you cannot send chat to it.")
+		playerIndex = t.GetPlayerIndexFromID(s.UserID())
+		spectatorIndex = t.GetSpectatorIndexFromID(s.UserID())
+		if playerIndex == -1 && spectatorIndex == -1 {
+			s.Warning("You are not playing or spectating at table " + strconv.FormatUint(t.ID, 10) +
+				", so you cannot send chat to it.")
 			return
 		}
 	}
@@ -235,15 +222,13 @@ func commandChatTable(s *Session, d *CommandData) {
 	if d.Server {
 		return
 	}
-	if j != -1 {
-		// They are a spectator
-		sp := t.Spectators[j]
+	if spectatorIndex != -1 {
+		sp := t.Spectators[spectatorIndex]
 		if sp.Typing {
 			sp.Typing = false
 		}
-	} else if i != -1 {
-		// They are a player
-		p := t.Players[i]
+	} else if playerIndex != -1 {
+		p := t.Players[playerIndex]
 		if p.Typing {
 			p.Typing = false
 		}
@@ -260,6 +245,9 @@ func sanitizeChatInput(s *Session, msg string, server bool) (string, bool) {
 	if len(msg) > maxLength {
 		msg = msg[0 : maxLength-1]
 	}
+
+	// Remove any non-printable characters, if any
+	msg = removeNonPrintableCharacters(msg)
 
 	// Check for valid UTF8
 	if !utf8.Valid([]byte(msg)) {

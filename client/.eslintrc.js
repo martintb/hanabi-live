@@ -16,16 +16,17 @@ module.exports = {
   parserOptions: {
     project: './tsconfig.json',
   },
-  plugins: [ '@typescript-eslint' ],
+  plugins: [
+    '@typescript-eslint',
+    'import',
+  ],
   settings: {
-    'import/extensions': ['.js', '.ts'],
+    'import/extensions': ['.ts'],
     'import/parsers': {
       '@typescript-eslint/parser': ['.ts'],
     },
     'import/resolver': {
-      'node': {
-        'extensions': ['.js', '.ts'],
-      },
+      'typescript': {},
     },
   },
 
@@ -43,6 +44,10 @@ module.exports = {
     // https://github.com/airbnb/javascript/blob/master/packages/eslint-config-airbnb-base/rules/style.js#L183
     '@typescript-eslint/lines-between-class-members': ['error', 'always', { exceptAfterSingleLine: true }],
 
+    // Enforce semi-colons inside interface and type declarations
+    // https://github.com/typescript-eslint/typescript-eslint/blob/master/packages/eslint-plugin/docs/rules/semi.md
+    '@typescript-eslint/member-delimiter-style': ['error'],
+
     // Keep the code a bit less verbose by removing inferrable type annotations
     '@typescript-eslint/no-inferrable-types': ['error', { ignoreParameters: true, ignoreProperties: true }],
 
@@ -51,12 +56,20 @@ module.exports = {
     '@typescript-eslint/no-unsafe-call': ['error'],
     '@typescript-eslint/no-unsafe-member-access': ['error'],
     '@typescript-eslint/no-unsafe-return': ['error'],
- 
+
     // This allows code to be structured in a more logical order
     // https://github.com/airbnb/javascript/blob/master/packages/eslint-config-airbnb-base/rules/variables.js#L42
     '@typescript-eslint/no-use-before-define': ['off'],
 
-    // The Hanabi codebase uses cyclical depedencies because
+    // Prevent using falsy/truthy to compare against null/undefined
+    // https://github.com/typescript-eslint/typescript-eslint/blob/master/packages/eslint-plugin/docs/rules/strict-boolean-expressions.md
+    // We allow 'any' values because Konva uses them a lot.
+    '@typescript-eslint/strict-boolean-expressions': ['error', { allowAny: true }],
+
+    // ESLint does not like TypeScript 3.8 syntax, e.g. "import { module } from 'file'"
+    'import/named': ['off'],
+
+    // The codebase uses cyclical dependencies because
     // various objects are attached to the global variables object,
     // but methods of these objects also reference/change global variables
     // https://github.com/airbnb/javascript/blob/master/packages/eslint-config-airbnb-base/rules/imports.js#L236
@@ -95,9 +108,9 @@ module.exports = {
     // https://github.com/airbnb/javascript/blob/master/packages/eslint-config-airbnb-base/rules/style.js#L316
     'no-multiple-empty-lines': ['error', { max: 1, maxBOF: 0, maxEOF: 0 }],
 
-    // We make use of parameter reassigning where appropriate
-    // https://github.com/airbnb/javascript/blob/master/packages/eslint-config-airbnb-base/rules/best-practices.js#L190
-    'no-param-reassign': ['off'],
+    // We allow reassigning properties of parameters, but not the parameters themselves
+    // https://github.com/airbnb/javascript/blob/master/packages/eslint-config-airbnb-base/rules/best-practices.js#L195
+    'no-param-reassign': ['error', { props: false }],
 
     // Airbnb disallows these because it can lead to errors with minified code;
     // we don't have to worry about this in for loops though
@@ -108,7 +121,7 @@ module.exports = {
     // https://github.com/airbnb/javascript/blob/master/packages/eslint-config-airbnb-base/rules/style.js#L334
     'no-restricted-syntax': ['off', 'ForOfStatement'],
 
-    // KineticJS's API has functions that are prefixed with an underscore
+    // KineticJS has functions that are prefixed with an underscore
     // (remove this once the code base is transitioned to Phaser)
     // https://github.com/airbnb/javascript/blob/master/packages/eslint-config-airbnb-base/rules/style.js#L371
     'no-underscore-dangle': ['off'],

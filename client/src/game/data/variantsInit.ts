@@ -1,10 +1,13 @@
-// Imports
 import variantsJSON from '../../../../data/variants.json';
+import * as abbreviationsRules from '../rules/abbreviation';
 import Color from '../types/Color';
 import Suit from '../types/Suit';
 import Variant from '../types/Variant';
 
+// "VariantJSON" is very similar to "Variant",
+// but the latter is comprised of some more complicated objects
 interface VariantJSON {
+  name: string;
   id: number;
   suits: string[];
 
@@ -21,21 +24,24 @@ interface VariantJSON {
   showSuitNames?: boolean;
   spacing?: boolean;
 }
-type VariantEntryIterable = Iterable<[keyof (typeof variantsJSON), VariantJSON]>;
 
-export default (COLORS: Map<string, Color>, SUITS: Map<string, Suit>, START_CARD_RANK: number) => {
+export default function variantsInit(
+  COLORS: Map<string, Color>,
+  SUITS: Map<string, Suit>,
+  START_CARD_RANK: number,
+) {
   const VARIANTS = new Map<string, Variant>();
 
-  for (const [variantName, variantJSON] of Object.entries(variantsJSON) as VariantEntryIterable) {
+  for (const variantJSON of variantsJSON as VariantJSON[]) {
     // Validate the name
-    const name: string = variantName;
+    const name: string = variantJSON.name;
     if (name === '') {
       throw new Error('There is a variant with an empty name in the "variants.json" file.');
     }
 
     // Validate the ID
     const id: number = variantJSON.id;
-    if (id < 0) {
+    if (id < 0) { // The first variant has an ID of 0
       throw new Error(`The "${name}" variant has an invalid ID.`);
     }
 
@@ -59,7 +65,7 @@ export default (COLORS: Map<string, Color>, SUITS: Map<string, Suit>, START_CARD
       }
 
       const suitObject = SUITS.get(suitString);
-      if (typeof suitObject !== 'undefined') {
+      if (suitObject !== undefined) {
         suits.push(suitObject);
       } else {
         throw new Error(`The suit "${suitString}" in the variant "${name}" does not exist.`);
@@ -89,7 +95,7 @@ export default (COLORS: Map<string, Color>, SUITS: Map<string, Suit>, START_CARD
         }
 
         const colorObject = COLORS.get(colorString);
-        if (typeof colorObject !== 'undefined') {
+        if (colorObject !== undefined) {
           clueColors.push(colorObject);
         } else {
           throw new Error(`The color "${colorString}" in the variant "${name}" does not exist.`);
@@ -121,9 +127,9 @@ export default (COLORS: Map<string, Color>, SUITS: Map<string, Suit>, START_CARD
       Object.hasOwnProperty.call(variantJSON, 'colorCluesTouchNothing')
       && variantJSON.colorCluesTouchNothing !== true
     ) {
-      throw new Error(`The "colorCluesTouchNothing" property for the variant "${variantName}" must be set to true.`);
+      throw new Error(`The "colorCluesTouchNothing" property for the variant "${variantJSON.name}" must be set to true.`);
     }
-    const colorCluesTouchNothing: boolean = variantJSON.colorCluesTouchNothing || false;
+    const colorCluesTouchNothing: boolean = variantJSON.colorCluesTouchNothing ?? false;
 
     // Validate the "rankCluesTouchNothing" property
     // If it is not specified, assume false (e.g. cluing ranks in this variant works normally)
@@ -131,9 +137,9 @@ export default (COLORS: Map<string, Color>, SUITS: Map<string, Suit>, START_CARD
       Object.hasOwnProperty.call(variantJSON, 'rankCluesTouchNothing')
       && variantJSON.rankCluesTouchNothing !== true
     ) {
-      throw new Error(`The "rankCluesTouchNothing" property for the variant "${variantName}" must be set to true.`);
+      throw new Error(`The "rankCluesTouchNothing" property for the variant "${variantJSON.name}" must be set to true.`);
     }
-    const rankCluesTouchNothing: boolean = variantJSON.rankCluesTouchNothing || false;
+    const rankCluesTouchNothing: boolean = variantJSON.rankCluesTouchNothing ?? false;
 
     // Validate the "specialRank" property (e.g. for "Rainbow-Ones")
     // If it is not specified, assume -1 (e.g. there are no special ranks)
@@ -141,9 +147,9 @@ export default (COLORS: Map<string, Color>, SUITS: Map<string, Suit>, START_CARD
       Object.hasOwnProperty.call(variantJSON, 'specialRank')
       && (variantJSON.specialRank! < 1 || variantJSON!.specialRank! > 5)
     ) {
-      throw new Error(`The "specialRank" property for the variant "${variantName}" must be set to true.`);
+      throw new Error(`The "specialRank" property for the variant "${variantJSON.name}" must be set to true.`);
     }
-    const specialRank: number = variantJSON.specialRank || -1;
+    const specialRank: number = variantJSON.specialRank ?? -1;
 
     // Validate the "specialAllClueColors" property
     // If it is not specified, assume false (e.g. cluing ranks in this variant works normally)
@@ -151,9 +157,9 @@ export default (COLORS: Map<string, Color>, SUITS: Map<string, Suit>, START_CARD
       Object.hasOwnProperty.call(variantJSON, 'specialAllClueColors')
       && variantJSON.specialAllClueColors !== true
     ) {
-      throw new Error(`The "specialAllClueColors" property for the variant "${variantName}" must be set to true.`);
+      throw new Error(`The "specialAllClueColors" property for the variant "${variantJSON.name}" must be set to true.`);
     }
-    const specialAllClueColors: boolean = variantJSON.specialAllClueColors || false;
+    const specialAllClueColors: boolean = variantJSON.specialAllClueColors ?? false;
 
     // Validate the "specialAllClueRanks" property
     // If it is not specified, assume false (e.g. cluing ranks in this variant works normally)
@@ -161,9 +167,9 @@ export default (COLORS: Map<string, Color>, SUITS: Map<string, Suit>, START_CARD
       Object.hasOwnProperty.call(variantJSON, 'specialAllClueRanks')
       && variantJSON.specialAllClueRanks !== true
     ) {
-      throw new Error(`The "specialAllClueRanks" property for the variant "${variantName}" must be set to true.`);
+      throw new Error(`The "specialAllClueRanks" property for the variant "${variantJSON.name}" must be set to true.`);
     }
-    const specialAllClueRanks: boolean = variantJSON.specialAllClueRanks || false;
+    const specialAllClueRanks: boolean = variantJSON.specialAllClueRanks ?? false;
 
     // Validate the "specialNoClueColors" property
     // If it is not specified, assume false (e.g. cluing ranks in this variant works normally)
@@ -171,9 +177,9 @@ export default (COLORS: Map<string, Color>, SUITS: Map<string, Suit>, START_CARD
       Object.hasOwnProperty.call(variantJSON, 'specialNoClueColors')
       && variantJSON.specialNoClueColors !== true
     ) {
-      throw new Error(`The "specialNoClueColors" property for the variant "${variantName}" must be set to true.`);
+      throw new Error(`The "specialNoClueColors" property for the variant "${variantJSON.name}" must be set to true.`);
     }
-    const specialNoClueColors: boolean = variantJSON.specialNoClueColors || false;
+    const specialNoClueColors: boolean = variantJSON.specialNoClueColors ?? false;
 
     // Validate the "specialNoClueRanks" property
     // If it is not specified, assume false (e.g. cluing ranks in this variant works normally)
@@ -181,9 +187,9 @@ export default (COLORS: Map<string, Color>, SUITS: Map<string, Suit>, START_CARD
       Object.hasOwnProperty.call(variantJSON, 'specialNoClueRanks')
       && variantJSON.specialNoClueRanks !== true
     ) {
-      throw new Error(`The "specialNoClueRanks" property for the variant "${variantName}" must be set to true.`);
+      throw new Error(`The "specialNoClueRanks" property for the variant "${variantJSON.name}" must be set to true.`);
     }
-    const specialNoClueRanks: boolean = variantJSON.specialNoClueRanks || false;
+    const specialNoClueRanks: boolean = variantJSON.specialNoClueRanks ?? false;
 
     // Validate the "showSuitNames" property
     // If it is not specified, assume that we are not showing the suit names
@@ -191,9 +197,9 @@ export default (COLORS: Map<string, Color>, SUITS: Map<string, Suit>, START_CARD
       Object.hasOwnProperty.call(variantJSON, 'showSuitNames')
       && variantJSON.showSuitNames !== true
     ) {
-      throw new Error(`The "showSuitNames" property for the variant "${variantName}" must be set to true.`);
+      throw new Error(`The "showSuitNames" property for the variant "${variantJSON.name}" must be set to true.`);
     }
-    let showSuitNames: boolean = variantJSON.showSuitNames || false;
+    let showSuitNames: boolean = variantJSON.showSuitNames ?? false;
 
     // Always set "showSuitNames" to true if it has one or more reversed suits
     for (const suit of suits) {
@@ -209,9 +215,9 @@ export default (COLORS: Map<string, Color>, SUITS: Map<string, Suit>, START_CARD
       Object.hasOwnProperty.call(variantJSON, 'spacing')
       && variantJSON.spacing !== true
     ) {
-      throw new Error(`The "spacing" property for the variant "${variantName}" must be set to true.`);
+      throw new Error(`The "spacing" property for the variant "${variantJSON.name}" must be set to true.`);
     }
-    const spacing: boolean = variantJSON.spacing || false;
+    const spacing: boolean = variantJSON.spacing ?? false;
 
     // Assume 5 cards per stack
     const maxScore = suits.length * 5;
@@ -220,6 +226,9 @@ export default (COLORS: Map<string, Color>, SUITS: Map<string, Suit>, START_CARD
     // of the card (e.g. the note indicator) because it will overlap with the triangle that
     // shows the color composition of the suit
     const offsetCornerElements = suits.some((suit: Suit) => suit.clueColors.length > 1);
+
+    // Prepare the abbreviations for each suit
+    const abbreviations = abbreviationsRules.makeAll(name, suits);
 
     // Add it to the map
     const variant: Variant = {
@@ -240,9 +249,10 @@ export default (COLORS: Map<string, Color>, SUITS: Map<string, Suit>, START_CARD
       spacing,
       maxScore,
       offsetCornerElements,
+      abbreviations,
     };
-    VARIANTS.set(variantName, variant);
+    VARIANTS.set(variantJSON.name, variant);
   }
 
   return VARIANTS;
-};
+}

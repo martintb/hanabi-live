@@ -2,7 +2,6 @@ package main
 
 import (
 	"strconv"
-	"time"
 )
 
 // commandTagDelete is sent when a user types the "/tagdelete [tag]" command
@@ -13,19 +12,16 @@ import (
 //   msg: 'inverted priority finesse',
 // }
 func commandTagDelete(s *Session, d *CommandData) {
-	// Validate that the table exists
-	tableID := d.TableID
-	var t *Table
-	if v, ok := tables[tableID]; !ok {
-		s.Warning("Table " + strconv.Itoa(tableID) + " does not exist.")
+	t, exists := getTableAndLock(s, d.TableID, !d.NoLock)
+	if !exists {
 		return
-	} else {
-		t = v
 	}
-	g := t.Game
+	if !d.NoLock {
+		defer t.Mutex.Unlock()
+	}
 
 	if !t.Running {
-		s.Warning(ChatCommandNotStartedFail)
+		s.Warning(NotStartedFail)
 		return
 	}
 
@@ -37,6 +33,13 @@ func commandTagDelete(s *Session, d *CommandData) {
 		d.Msg = v
 	}
 
+	tagDelete(s, d, t)
+}
+
+func tagDelete(s *Session, d *CommandData, t *Table) {
+	// Local variables
+	g := t.Game
+
 	if !t.Replay {
 		// See if the tag exists
 		if _, ok := g.Tags[d.Msg]; ok {
@@ -44,13 +47,8 @@ func commandTagDelete(s *Session, d *CommandData) {
 
 			// Send them an acknowledgement via private message to avoid spoiling information about
 			// the ongoing game
-			s.Emit("chat", &ChatMessage{
-				Msg:       "Successfully deleted the tag of \"" + d.Msg + "\".",
-				Who:       "Hanabi Live",
-				Datetime:  time.Now(),
-				Room:      d.Room,
-				Recipient: s.Username(),
-			})
+			msg := "Successfully deleted the tag of \"" + d.Msg + "\"."
+			chatServerSendPM(s, msg, d.Room)
 		} else {
 			s.Warning("The tag of \"" + d.Msg + "\" does not exist on this game yet.")
 		}
@@ -59,8 +57,9 @@ func commandTagDelete(s *Session, d *CommandData) {
 
 	// Get the existing tags from the database
 	var tags []string
-	if v, err := models.GameTags.GetAll(g.ID); err != nil {
-		logger.Error("Failed to get the tags for game ID "+strconv.Itoa(g.ID)+":", err)
+	if v, err := models.GameTags.GetAll(t.ExtraOptions.DatabaseID); err != nil {
+		logger.Error("Failed to get the tags for game ID "+
+			strconv.Itoa(t.ExtraOptions.DatabaseID)+":", err)
 		s.Error(DefaultErrorMsg)
 		return
 	} else {
@@ -74,13 +73,13 @@ func commandTagDelete(s *Session, d *CommandData) {
 	}
 
 	// Delete it from the database
-	if err := models.GameTags.Delete(g.ID, d.Msg); err != nil {
-		logger.Error("Failed to delete a tag for game ID "+strconv.Itoa(g.ID)+":", err)
+	if err := models.GameTags.Delete(t.ExtraOptions.DatabaseID, d.Msg); err != nil {
+		logger.Error("Failed to delete a tag for game ID "+
+			strconv.Itoa(t.ExtraOptions.DatabaseID)+":", err)
 		s.Error(DefaultErrorMsg)
 		return
 	}
 
 	msg := s.Username() + " has deleted a game tag of \"" + d.Msg + "\"."
-	room := "table" + strconv.Itoa(tableID)
-	chatServerSend(msg, room)
+	chatServerSend(msg, t.GetRoomName())
 }

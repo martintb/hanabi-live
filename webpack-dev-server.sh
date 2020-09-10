@@ -5,10 +5,18 @@
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
 # Import the WebPack port
-source "$DIR/.env"
+ENV_PATH="$DIR/.env"
+if [[ ! -f $ENV_PATH ]]; then
+  echo "Failed to find the \".env\" file at: $ENV_PATH"
+  exit 1
+fi
+source "$ENV_PATH"
+if [[ -z $DOMAIN ]]; then
+  DOMAIN="localhost"
+fi
 if [[ -z $WEBPACK_DEV_SERVER_PORT ]]; then
   WEBPACK_DEV_SERVER_PORT=8080
 fi
 
 cd "$DIR/client"
-npx webpack-dev-server --port $WEBPACK_DEV_SERVER_PORT
+npx webpack-dev-server --host "$DOMAIN" --port "$WEBPACK_DEV_SERVER_PORT"

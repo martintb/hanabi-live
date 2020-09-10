@@ -8,6 +8,9 @@
 hanabi-live
 hanabi-live~
 hanabi-live.exe
+hanabi-live-temp
+hanabi-live-temp~
+hanabi-live-temp.exe
 
 # Temporary files
 compiling_client
@@ -15,10 +18,15 @@ compiling_client
 # The message of the day
 motd.txt*
 
+# If we accidentally perform an npm command in the root of the repository,
+# we do not want to commit the leftover package.lock file
+/package.lock
+
 # The version file will change automatically with every commit
 /data/version.json
 
 # Various directories
-backups
-letsencrypt
-logs
+/backups
+/letsencrypt
+/logs
+/data/ongoing_tables

@@ -10,6 +10,19 @@ DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 # https://stackoverflow.com/questions/16908084/bash-script-to-calculate-time-elapsed
 SECONDS=0
 
+# Import the port
+if [[ -z $CI ]]; then
+  ENV_PATH="$DIR/../.env"
+  if [[ ! -f $ENV_PATH ]]; then
+    echo "Failed to find the \".env\" file at: $ENV_PATH"
+    exit 1
+  fi
+  source "$ENV_PATH"
+  if [[ -z $PORT ]]; then
+    PORT="80"
+  fi
+fi
+
 # Set the version number in the "version.json" file
 # (which is equal to the number of commits in the git repository)
 # This is "baked" into the JavaScript bundle and self-reported when connecting to the server so that
@@ -21,7 +34,7 @@ echo "$VERSION" > "$DIR/../data/version.json"
 # (the Golang process will execute this script during a graceful restart and it will not have it in
 # the path by default)
 if ! command -v npx > /dev/null; then
-  # MacOS only has Bash version 3, which does not have assosiative arrays,
+  # MacOS only has Bash version 3, which does not have associative arrays,
   # so the below check will not work
   # https://unix.stackexchange.com/questions/92208/bash-how-to-get-the-first-number-that-occurs-in-a-variables-content
   BASH_VERSION_FIRST_DIGIT=$(bash --version | grep -o -E '[0-9]+' | head -1 | sed -e 's/^0\+//')
@@ -66,13 +79,13 @@ cp "$WEBPACK_OUTPUT_DIR/main.$VERSION.min.js.map" "$BUNDLES_DIR/"
 echo "$VERSION" > "$BUNDLES_DIR/version.txt"
 # In addition to the numerical version (e.g. the number of commits),
 # it is also handy to have the exact git commit hash for the current build
-echo $(git rev-parse HEAD) > "$DIR/../public/js/bundles/git-revision.txt"
+echo $(git rev-parse HEAD) > "$DIR/../public/js/bundles/git_revision.txt"
 rm -f "$COMPILING_FILE"
 
 # Clean up old files in the "bundles" directory
 cd "$DIR/../public/js/bundles"
-if [[ $(ls | grep -v "main.$VERSION" | grep -v version.txt | grep -v git-revision.txt) ]]; then
-  ls | grep -v "main.$VERSION" | grep -v version.txt | grep -v git-revision.txt | xargs rm
+if [[ $(ls | grep -v "main.$VERSION" | grep -v version.txt | grep -v git_revision.txt) ]]; then
+  ls | grep -v "main.$VERSION" | grep -v version.txt | grep -v git_revision.txt | xargs rm
   # (we don't use an environment variable to store the results because it will cause the script to
   # stop execution in the case where there are no results)
 fi
@@ -80,9 +93,18 @@ cd "$DIR"
 
 # Similar to the JavaScript, we need to concatenate all of the CSS into one file before sending it
 # to end-users
-echo "Packing the CSS using Grunt..."
-echo
-npx grunt
-echo
+if [[ $1 == "crit" ]]; then
+  echo "Packing the CSS and generating critical CSS using Grunt..."
+  echo
+  npx grunt critical --url=http://localhost:$PORT
+  echo
+  echo "Remember to commit critical.min.css if it had any changes."
+  echo
+else
+  echo "Packing the CSS using Grunt..."
+  echo
+  npx grunt
+  echo
+fi
 
 echo "Client v$VERSION successfully built in $SECONDS seconds."

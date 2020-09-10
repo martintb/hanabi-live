@@ -1,6 +1,5 @@
-// Imports
 import Konva from 'konva';
-import FitText from './FitText';
+import FitText from './controls/FitText';
 import globals from './globals';
 
 export default class MultiFitText extends Konva.Group {
@@ -10,7 +9,7 @@ export default class MultiFitText extends Konva.Group {
   constructor(config: Konva.ContainerConfig, maxLines: number) {
     super(config);
 
-    if (typeof config.height === 'undefined') {
+    if (config.height === undefined) {
       throw new Error('The "height" property is not defined on a new MultiFitText.');
     }
 
@@ -19,6 +18,7 @@ export default class MultiFitText extends Konva.Group {
     for (let i = 0; i < this.maxLines; i++) {
       const newConfig = $.extend({}, config);
 
+      newConfig.listening = false;
       newConfig.height = config.height / this.maxLines;
       newConfig.x = 0;
       newConfig.y = i * newConfig.height;
@@ -35,9 +35,9 @@ export default class MultiFitText extends Konva.Group {
     this.smallHistory.push(text);
 
     // Performance optimization: setText on the children is slow,
-    // so don't actually do it until its time to display things
+    // so do not actually do it until its time to display things
     // We also have to call refreshText after any time we manipulate replay position
-    if (!globals.inReplay || !globals.animateFast) {
+    if (!globals.state.replay.active || !globals.animateFast) {
       this.refreshText();
     }
   }

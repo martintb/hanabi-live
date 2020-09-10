@@ -1,15 +1,14 @@
-// Imports
 import Color from './Color';
 import Suit from './Suit';
 
 export default interface Variant {
   readonly name: string;
-
   readonly id: number;
   readonly suits: Suit[];
   readonly ranks: number[];
   readonly clueColors: Color[];
   readonly clueRanks: number[];
+
   readonly colorCluesTouchNothing: boolean;
   readonly rankCluesTouchNothing: boolean;
   readonly specialRank: number;
@@ -22,4 +21,5 @@ export default interface Variant {
   readonly spacing: boolean;
   readonly maxScore: number;
   readonly offsetCornerElements: boolean;
+  readonly abbreviations: string[];
 }

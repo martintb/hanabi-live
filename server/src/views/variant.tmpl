@@ -10,14 +10,14 @@
 
   <!-- Header -->
   <header id="header">
-    <h1>Hanabi Live</h1>
+    <h1>{{ template "logo" }}</h1>
     <nav id="nav"></nav>
   </header>
 
   <!-- Main -->
   <section id="main" class="container max">
     <header>
-      <h2><img src="/public/img/logos/5.png" height="200"></h2>
+      <h2><img src="/public/img/logos/header.svg" height="200"></h2>
     </header>
     <div class="row uniform 100%">
       <div class="col-12">
@@ -85,14 +85,14 @@
                   <th># of Players</th>
                   <th>Score</th>
                   <th>Players</th>
-                  <th>Date Played</th>
+                  <th>Date & Time</th>
                 </tr>
               </thead>
               <tbody>
                 {{range $index, $results := .RecentGames}}
                   <tr>
                     <td><a href="/replay/{{.ID}}">{{.ID}}</a></td>
-                    <td>{{.NumPlayers}}</td>
+                    <td>{{.Options.NumPlayers}}</td>
                     <td>{{.Score}}</td>
                     <td>
                       <!-- From: https://stackoverflow.com/questions/21305865/golang-separating-items-with-comma-in-template -->
@@ -100,7 +100,7 @@
                         {{range $index2, $results2 := .PlayerNames}}{{if $index2}}, {{end}}{{$results2}}{{end}}
                       </a>
                     </td>
-                    <td>{{.DatetimeFinished}}</td>
+                    <td>{{.DatetimeFinished | formatDate}}</td>
                   </tr>
                 {{- end -}}
               </tbody>

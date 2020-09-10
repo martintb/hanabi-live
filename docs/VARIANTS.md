@@ -1,6 +1,6 @@
 # Variants
 
-[Hanabi Live](https://hanabi.live) is programmed by Hanabi enthusiasts who have played the game thousands of times. In order to keep the game fresh, the server allows you to create games using the variants mentioned in the [rules that come with the game](https://github.com/Zamiell/hanabi-conventions/blob/master/misc/Rules.md#multicolor-variants) as well as many other non-official custom variants. Players also have the ability to further custom a game by using a number of [custom game options](https://github.com/Zamiell/hanabi-live/blob/master/docs/FEATURES.md#custom-game-options).
+[Hanab Live](https://hanab.live) is programmed by enthusiasts who have played the game thousands of times. In order to keep the game fresh, the server allows you to create games using many different variants. Players also have the ability to further custom a game by using a number of [custom game options](https://github.com/Zamiell/hanabi-live/blob/master/docs/FEATURES.md#custom-game-options).
 
 <br />
 
@@ -28,7 +28,7 @@ One of each card per suit (e.g. 5 in total):
 
 ### No Variant
 
-* This is the "normal" game, with 5 suits. Unlike some real-life versions of the game, Hanabi Live uses the following five suit colors:
+* This is the "normal" game, with 5 suits. Unlike some other versions of the game, the website uses the following five suit colors:
   * Blue
   * Green
   * Yellow
@@ -39,7 +39,6 @@ One of each card per suit (e.g. 5 in total):
 
 * A teal suit is added.
 * It works identical to the other suits in that you can clue teal cards with teal clues.
-* (This is the first [official variant](https://github.com/Zamiell/hanabi-conventions/blob/master/misc/Rules.md#multicolor-variants).)
 
 ### 4 Suits
 
@@ -54,13 +53,11 @@ One of each card per suit (e.g. 5 in total):
 * One of the suits is replaced with a black suit.
 * It works similar to the other suits in that you can clue black cards with black clues.
 * There is only one of each black card in the deck, which means that every black card is "critical".
-* (This is the second [official variant](https://github.com/Zamiell/hanabi-conventions/blob/master/misc/Rules.md#multicolor-variants).)
 
 ### Rainbow
 
 * One of the suits is replaced with a rainbow suit.
 * All color clues will "touch" the rainbow suit.
-* (This is the third [official variant](https://github.com/Zamiell/hanabi-conventions/blob/master/misc/Rules.md#multicolor-variants).)
 
 ### Pink
 
@@ -99,7 +96,13 @@ One of each card per suit (e.g. 5 in total):
 * All rank clues will "touch" the light pink suit.
 * No color clues will "touch" the light pink suit.
 
-### Dark Rainbow / Dark Pink / Gray / Dark Brown / Dark Omni / Dark Null / Cocoa Rainbow / Gray Pink
+### Prism
+
+* One of the suits is replaced with a prism suit.
+* The prism 1 is touched by the left-most color, the prism 2 is touched by the second-to-left-most color, and so forth.
+* If there are less than 5 colors available in the variant, then the colors used for prism cards will wrap-around.
+
+### Dark [Suit] / Gray / Cocoa Rainbow / Gray Pink
 
 * One of the suits is replaced with a "dark" version of a special suit.
   * Gray is the "dark" version of white.
@@ -121,8 +124,16 @@ One of each card per suit (e.g. 5 in total):
 
 ### Suit-Ones or Suit-Fives with Another Special Suit
 
-* Suit-Ones or Suit-Fives of a special suit inherit the special suit's properties and override the property of the one/five if a conflict is present.
-* For example, in the "Muddy-Rainbow-Fives & Pink" variant, the pink 5 is touched by all colors and touched by all ranks.
+* Suit-Ones or Suit-Fives of a special suit inherit the special suit's properties.
+  * For example, consider the "Rainbow-Fives & Pink" variant:
+    * The rainbow suit has the property of being touched by all colors.
+    * The pink suit has the property of being touched by all ranks.
+    * These add together and the pink 5 is touched by all colors and touched by all ranks.
+* If a conflict is present, the suit property will override the special property.
+  * For example, consider the "Null-Ones & Rainbow" variant:
+    * The null suit has the property of being touched by no colors and touched by no ranks.
+    * The rainbow suit has the property of being touched by all colors.
+    * These add together, but the the color touch property is in conflict. The rainbow property takes precedence, so the rainbow 1 is touched by all colors and touched by no ranks.
 
 ### Ambiguous
 
@@ -242,7 +253,6 @@ One of each card per suit (e.g. 5 in total):
 * The reversed suit must be played in the opposite order (e.g. 5, 4, 3, 2, 1).
 * Two 1's are removed from the reversed suit.
 * Two 5's are added to the reversed suit.
-* The "White Reversed (6 Suits)" variant is an official variant introduced with [Hanabi Grands Feux](https://www.cocktailgames.com/jeu/hanabi-grands-feux/) under the name "Poudre Noire" (Black Powder).
 
 ### Up or Down
 

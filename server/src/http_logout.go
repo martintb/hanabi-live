@@ -9,6 +9,8 @@ import (
 )
 
 func httpLogout(c *gin.Context) {
+	dev := c.DefaultQuery("dev", "false")
+
 	deleteCookie(c)
 
 	// We need tell tell the browser to not cache the redirect
@@ -17,7 +19,11 @@ func httpLogout(c *gin.Context) {
 	// logout and beyond, the browser would not actually send a GET request to "/logout"
 	c.Writer.Header().Set("Cache-Control", "no-store")
 
-	c.Redirect(http.StatusMovedPermanently, "/")
+	path := "/"
+	if dev == "true" {
+		path = "/dev"
+	}
+	c.Redirect(http.StatusMovedPermanently, path)
 }
 
 func deleteCookie(c *gin.Context) {
@@ -28,7 +34,7 @@ func deleteCookie(c *gin.Context) {
 	// Parse the IP address
 	var ip string
 	if v, _, err := net.SplitHostPort(r.RemoteAddr); err != nil {
-		logger.Error("Failed to parse the IP address in the deleteCookie function:", err)
+		logger.Error("Failed to parse the IP address:", err)
 		http.Error(
 			w,
 			http.StatusText(http.StatusInternalServerError),

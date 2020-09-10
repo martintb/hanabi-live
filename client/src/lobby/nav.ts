@@ -1,9 +1,7 @@
 // The navigation bar at the top of the lobby
 
-// Imports
-import { FADE_TIME } from '../constants';
 import globals from '../globals';
-import * as misc from '../misc';
+import { closeAllTooltips } from '../misc';
 import * as modals from '../modals';
 import * as createGame from './createGame';
 import * as history from './history';
@@ -11,6 +9,9 @@ import * as pregame from './pregame';
 import * as watchReplay from './watchReplay';
 
 export const init = () => {
+  // Remove the recursive link to prevent confusion
+  $('#logo-link').removeAttr('href');
+
   // Initialize all of the navigation tooltips using Tooltipster
   initTooltips();
 
@@ -38,7 +39,13 @@ export const init = () => {
   // (initialized in the "initTooltips()" function)
 
   // The "Sign Out" button
-  // (this is just a simple link)
+  $('.signout').on('click', () => {
+    let path = '/logout';
+    if (window.location.pathname.includes('/dev')) {
+      path += '?dev=true';
+    }
+    window.location.href = path;
+  });
 
   // The "Start Game" button
   $('#nav-buttons-pregame-start').on('click', () => {
@@ -106,7 +113,7 @@ const initTooltips = () => {
       'scrollableTip', // Make it scrollable
     ],
     functionBefore: () => {
-      $('#lobby').fadeTo(FADE_TIME, 0.4);
+      modals.setShadeOpacity(0.6);
     },
   };
 
@@ -124,7 +131,7 @@ const initTooltips = () => {
       }
     }
     if (tooltipsOpen <= 1) {
-      $('#lobby').fadeTo(FADE_TIME, 1);
+      modals.setShadeOpacity(0);
     }
   };
 
@@ -141,7 +148,7 @@ const initTooltips = () => {
   $(document).keydown((event) => {
     if (event.key === 'Escape') {
       event.preventDefault();
-      misc.closeAllTooltips();
+      closeAllTooltips();
       modals.closeAll();
     }
   });

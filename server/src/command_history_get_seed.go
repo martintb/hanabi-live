@@ -1,5 +1,9 @@
 package main
 
+const (
+	SeedSort = "score DESC, id ASC"
+)
+
 // commandHistoryGetSeed is sent when the user clicks on the "Compare Scores" button
 //
 // Example data:
@@ -13,7 +17,7 @@ func commandHistoryGetSeed(s *Session, d *CommandData) {
 	}
 
 	// Check for non-ASCII characters
-	if !isPrintableASCII(d.Seed) {
+	if !containsAllPrintableASCII(d.Seed) {
 		s.Warning("Seeds can only contain ASCII characters.")
 		return
 	}
@@ -35,8 +39,9 @@ func commandHistoryGetSeed(s *Session, d *CommandData) {
 	}
 
 	// Get the history for these game IDs
+	// (with a custom sort by score)
 	var gameHistoryList []*GameHistory
-	if v, err := models.Games.GetHistory(gameIDs); err != nil {
+	if v, err := models.Games.GetHistoryCustomSort(gameIDs, SeedSort); err != nil {
 		logger.Error("Failed to get the history:", err)
 		s.Error(DefaultErrorMsg)
 		return

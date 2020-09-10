@@ -1,73 +1,46 @@
 import Color from './Color';
-import Suit from './Suit';
 
 export default interface CardState {
-  order: number;
-  // The index of the player that holds this card (or null if played/discarded)
-  holder: number | null;
-  suit: Suit | null;
-  rank: number | null;
-  blank: boolean;
-  // The suit corresponding to the note written on the card, if any
-  noteSuit: Suit | null;
-  // The rank corresponding to the note written on the card, if any
-  noteRank: number | null;
-  noteKnownTrash: boolean;
-  noteNeedsFix: boolean;
-  noteChopMoved: boolean;
-  noteFinessed: boolean;
-  noteBlank: boolean;
-  noteUnclued: boolean;
+  readonly order: number;
+  // If location is a number, it is the index of the player that holds this card
+  readonly location: CardLocation;
+  readonly suitIndex: number | null;
+  readonly rank: number | null;
 
-  // The following are the variables that are refreshed
-  possibleSuits: Suit[];
-  possibleRanks: number[];
-  possibleCards: Map<string, number>;
-  identityDetermined: boolean;
-  numPositiveClues: number;
-  positiveColorClues: Color[];
-  negativeColorClues: Color[];
-  positiveRankClues: number[];
-  negativeRankClues: number[];
-  turnsClued: number[];
-  turnDrawn: number;
-  isDiscarded: boolean;
-  turnDiscarded: number;
-  isPlayed: boolean;
-  turnPlayed: number;
-  isMisplayed: boolean;
+  // possibleCardsFromObservation is a two-dimensional array indexed by suitIndex and rank
+  // The value is how many cards of this suitIndex and rank it could be (excluding clue information)
+  // Note that we are using an array as a map,
+  // so there will be empty spaces for ranks that are not valid card ranks
+  // (e.g. 0, or 6 in Up or Down)
+  readonly possibleCardsFromObservation: ReadonlyArray<readonly number[]>;
+
+  // possibleCardsFromClues is a one-dimensional array of tuples
+  // It contains a tuple for each specific card that is still possible based on the clues touching
+  // the card so far
+  // Do not access this by the index; filter the array to find the remaining cards that you need
+  // This is not a two-dimensional array like "possibleCardsFromObservation" is because clues remove
+  // card possibilities in a binary way (as opposed to removing them one by one)
+  readonly possibleCardsFromClues: ReadonlyArray<readonly [number, number]>;
+
+  // We need this to highlight pips (e.g. on Pink variants)
+  readonly positiveColorClues: Color[]; // The elements of this array will always be unique
+  readonly positiveRankClues: number[]; // The elements of this array will always be unique
+
+  // TODO: save positive rank clues and highlight them (e.g. on Rainbow-Ones variants)
+
+  readonly suitDetermined: boolean;
+  readonly rankDetermined: boolean;
+  readonly numPositiveClues: number;
+  readonly segmentFirstClued: number | null;
+  readonly segmentDrawn: number | null;
+  readonly segmentDiscarded: number | null;
+  readonly segmentPlayed: number | null;
+
+  // Needed so that we can animate a misplayed card different from a discarded card
+  readonly isMisplayed: boolean;
+
+  // Needed for special sound effects
+  readonly dealtToStartingHand: boolean;
 }
 
-export function cardInitialState(order: number) : CardState {
-  return {
-    order,
-    holder: null,
-    suit: null,
-    rank: null,
-    blank: false,
-    noteSuit: null,
-    noteRank: null,
-    noteKnownTrash: false,
-    noteNeedsFix: false,
-    noteChopMoved: false,
-    noteFinessed: false,
-    noteBlank: false,
-    noteUnclued: false,
-    possibleSuits: [],
-    possibleRanks: [],
-    possibleCards: new Map<string, number>(),
-    identityDetermined: false,
-    numPositiveClues: 0,
-    positiveColorClues: [],
-    negativeColorClues: [],
-    positiveRankClues: [],
-    negativeRankClues: [],
-    turnsClued: [],
-    turnDrawn: -1,
-    isDiscarded: false,
-    turnDiscarded: -1,
-    isPlayed: false,
-    turnPlayed: -1,
-    isMisplayed: false,
-  };
-}
+export type CardLocation = 'deck' | 'discard' | 'playStack' | number;

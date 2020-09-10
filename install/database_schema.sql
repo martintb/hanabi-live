@@ -1,7 +1,7 @@
 /*
  * Notes:
- * - Hanabi Live uses PostreSQL
- * - Initalizing the database is accomplished in the "install_database_schema.sh" script
+ * - The website uses PostgreSQL
+ * - Initializing the database is accomplished in the "install_database_schema.sh" script
  * - "SERIAL" is a keyword in PostgreSQL to have an automatic-incrementing column:
  *   https://www.postgresqltutorial.com/postgresql-serial
  * - PostgreSQL automatically creates indexes for columns with primary keys, foreign keys, and
@@ -27,8 +27,8 @@ CREATE TABLE users (
      * Furthermore, because of Unicode, it would be possible for "Αlice" with a Greek letter A
      * (0x391) and "Alice" with a normal A (0x41) to exist
      * To guard against users impersonating each other & phishing attacks, we also store a
-     * normalized version of the username that is converted to ASCII with the go-unidecode library
-     * and then lower-cased
+     * normalized version of the username that is transliterated to ASCII with the go-unidecode
+     * library and then lower-cased
      * Importantly, we must verify that all new usernames are unique in code before adding them to
      * the database
      */
@@ -73,7 +73,6 @@ CREATE TABLE user_settings (
     create_table_one_less_card           BOOLEAN   NOT NULL  DEFAULT FALSE,
     create_table_all_or_nothing          BOOLEAN   NOT NULL  DEFAULT FALSE,
     create_table_detrimental_characters  BOOLEAN   NOT NULL  DEFAULT FALSE,
-    create_table_alert_waiters           BOOLEAN   NOT NULL  DEFAULT FALSE,
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 );
 
@@ -81,7 +80,7 @@ CREATE TABLE user_settings (
 DROP TABLE IF EXISTS user_stats CASCADE;
 CREATE TABLE user_stats (
     user_id          INTEGER   NOT NULL,
-    variant          SMALLINT  NOT NULL,
+    variant_id       SMALLINT  NOT NULL,
     num_games        INTEGER   NOT NULL  DEFAULT 0,
     /* Their best score for 2-player games on this variant */
     best_score2      SMALLINT  NOT NULL  DEFAULT 0,
@@ -98,7 +97,7 @@ CREATE TABLE user_stats (
     average_score    FLOAT     NOT NULL  DEFAULT 0,
     num_strikeouts   INTEGER   NOT NULL  DEFAULT 0,
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
-    PRIMARY KEY (user_id, variant)
+    PRIMARY KEY (user_id, variant_id)
 );
 
 DROP TABLE IF EXISTS user_friends CASCADE;
@@ -129,8 +128,8 @@ CREATE TABLE games (
      * This field is only needed for legacy games before April 2020
      */
     starting_player         SMALLINT     NOT NULL  DEFAULT 0,
-    /* Equal to the variant ID (found in "variants.json") */
-    variant                 SMALLINT     NOT NULL,
+    /* The ID for a particular variant can be found in the "variants.json" file */
+    variant_id              SMALLINT     NOT NULL,
     timed                   BOOLEAN      NOT NULL,
     time_base               INTEGER      NOT NULL, /* in seconds */
     time_per_turn           INTEGER      NOT NULL, /* in seconds */
@@ -151,7 +150,7 @@ CREATE TABLE games (
     datetime_finished       TIMESTAMPTZ  NOT NULL
 );
 CREATE INDEX games_index_num_players ON games (num_players);
-CREATE INDEX games_index_variant     ON games (variant);
+CREATE INDEX games_index_variant_id  ON games (variant_id);
 CREATE INDEX games_index_seed        ON games (seed);
 
 DROP TABLE IF EXISTS game_participants CASCADE;
@@ -212,12 +211,18 @@ CREATE TABLE game_tags (
     CONSTRAINT game_tags_unique UNIQUE (game_id, tag)
 );
 
+DROP TABLE IF EXISTS seeds CASCADE;
+CREATE TABLE seeds (
+    seed       TEXT     NOT NULL  PRIMARY KEY,
+    num_games  INTEGER  NOT NULL
+);
+
 DROP TABLE IF EXISTS variant_stats CASCADE;
 CREATE TABLE variant_stats (
-    /* Equal to the variant ID (found in "variants.go") */
-    variant         SMALLINT  NOT NULL  PRIMARY KEY,
+    /* The ID for a particular variant can be found in the "variants.json" file */
+    variant_id      SMALLINT  NOT NULL  PRIMARY KEY,
     num_games       INTEGER   NOT NULL  DEFAULT 0,
-    /* The overall best score for a 2-player games on this variant */
+    /* The best score from any team for a 2-player game on this variant */
     best_score2     SMALLINT  NOT NULL  DEFAULT 0,
     best_score3     SMALLINT  NOT NULL  DEFAULT 0,
     best_score4     SMALLINT  NOT NULL  DEFAULT 0,
@@ -299,11 +304,3 @@ CREATE TABLE metadata (
 );
 /* The "discord_last_at_here" value is stored as a RFC3339 string */
 INSERT INTO metadata (name, value) VALUES ('discord_last_at_here', '2006-01-02T15:04:05Z');
-
-DROP TABLE IF EXISTS discord_waiters CASCADE;
-CREATE TABLE discord_waiters (
-    id                SERIAL       PRIMARY KEY,
-    username          TEXT         NOT NULL,
-    discord_mention   TEXT         NOT NULL,
-    datetime_expired  TIMESTAMPTZ  NOT NULL
-);

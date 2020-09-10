@@ -1,15 +1,16 @@
 // CardLayout is an object that represents a player's hand (or a discard pile)
 // It is composed of LayoutChild objects
 
-// Imports
 import Konva from 'konva';
+import { CARD_ANIMATION_LENGTH } from './constants';
 import globals from './globals';
 import HanabiCard from './HanabiCard';
+import { animate } from './konvaHelpers';
 import LayoutChild from './LayoutChild';
 
 export default class CardLayout extends Konva.Group {
-  align: string;
-  reverse: boolean;
+  private align: string;
+  private reverse: boolean;
   origRotation: number;
   empathy: boolean;
 
@@ -19,13 +20,13 @@ export default class CardLayout extends Konva.Group {
     // Class variables
     this.align = (config.align || 'left') as string;
     this.reverse = (config.reverse || false) as boolean;
-    this.origRotation = config.rotation || 0;
+    this.origRotation = config.rotation ?? 0;
     this.empathy = false;
 
-    if (typeof config.width === 'undefined') {
+    if (config.width === undefined) {
       throw new Error('A width was not defined for a CardLayout.');
     }
-    if (typeof config.height === 'undefined') {
+    if (config.height === undefined) {
       throw new Error('A height was not defined for a CardLayout.');
     }
 
@@ -38,11 +39,16 @@ export default class CardLayout extends Konva.Group {
       height: config.height,
       fill: 'black',
       rotation: config.rotation,
+      listening: false,
     });
     globals.layers.UI.add(debugRect);
     */
   }
 
+  // The card has a relative position relating to its location
+  // (e.g. a player's hand, the play stacks)
+  // Use the absolute position so that we can tween it from one location to another without having
+  // to worry about the relative position
   addChild(child: LayoutChild) {
     const pos = child.getAbsolutePosition();
     this.add(child as any);
@@ -56,98 +62,131 @@ export default class CardLayout extends Konva.Group {
   }
 
   doLayout() {
+    // Local variables
+    const handWidth = this.width();
+    const handHeight = this.height();
+    const numCards = this.children.length;
+
     let uw = 0;
-    let dist = 0;
-    let x = 0;
+    for (let i = 0; i < numCards; i++) {
+      const layoutChild = this.children[i] as unknown as LayoutChild;
 
-    const lw = this.width();
-    const lh = this.height();
-
-    const n = this.children.length;
-    for (let i = 0; i < n; i++) {
-      const node = this.children[i]; // This is a LayoutChild
-
-      if (!node.height()) {
+      if (!layoutChild.height()) {
         continue;
       }
 
-      const scale = lh / node.height();
-      uw += scale * node.width();
+      const scale = handHeight / layoutChild.height();
+      uw += scale * layoutChild.width();
     }
 
-    if (n > 1) {
-      dist = (lw - uw) / (n - 1);
+    let spacingBetweenCards = 0;
+    if (numCards > 1) {
+      spacingBetweenCards = (handWidth - uw) / (numCards - 1);
     }
-    if (dist > 10) {
-      dist = 10;
+    let maxSpacingBetweenCards = 0.04 * uw;
+    if (globals.lobby.settings.keldonMode) {
+      maxSpacingBetweenCards = 0.025 * uw;
     }
-    uw += dist * (n - 1);
+    if (spacingBetweenCards > maxSpacingBetweenCards) {
+      spacingBetweenCards = maxSpacingBetweenCards;
+    }
+    uw += spacingBetweenCards * (numCards - 1);
 
-    if (this.align === 'center' && uw < lw) {
-      x = (lw - uw) / 2;
+    let x = 0;
+    if (this.align === 'center' && uw < handWidth) {
+      x = (handWidth - uw) / 2;
     }
     if (this.reverse) {
-      x = lw - x;
+      x = handWidth - x;
     }
 
-    const storedPostAnimationLayout = globals.postAnimationLayout;
-    for (let i = 0; i < n; i++) {
-      const node = this.children[i] as unknown as LayoutChild;
+    for (let i = 0; i < numCards; i++) {
+      const layoutChild = this.children[i] as unknown as LayoutChild;
 
-      if (!node.height()) {
+      // Ensure this card is not hidden at the bottom of a play stack
+      layoutChild.show();
+
+      if (!layoutChild.height()) {
         continue;
       }
 
-      const scale = lh / node.height();
+      const scale = handHeight / layoutChild.height();
 
-      if (node.tween) {
-        node.tween.destroy();
+      if (layoutChild.tween !== null) {
+        layoutChild.tween.destroy();
+        layoutChild.tween = null;
       }
 
-      const newX = x - (this.reverse ? scale * node.width() : 0);
+      const newX = x - (this.reverse ? scale * layoutChild.width() : 0);
       if (globals.animateFast) {
-        node.x(newX);
-        node.y(0);
-        node.scaleX(scale);
-        node.scaleY(scale);
-        node.rotation(0);
-        node.checkSetDraggable();
+        // Immediately set the card in place at the new location
+        layoutChild.x(newX);
+        layoutChild.y(0);
+        layoutChild.scaleX(scale);
+        layoutChild.scaleY(scale);
+        layoutChild.rotation(0);
+        layoutChild.opacity(1);
+        layoutChild.checkSetDraggable();
+        layoutChild.card.setRaiseAndShadowOffset();
+        layoutChild.doMisplayAnimation = false;
       } else {
-        // Animate the card going from the deck to the hand
-        // (or from the hand to the discard pile)
+        // Animate the card going:
+        // - from the deck to a player's hand (or vice versa)
+        // - or leaving the hand to the discard pile (or vice versa)
         // and animate the rest of the cards sliding over
-        const card = node.children[0] as unknown as HanabiCard;
-        card.tweening = true;
-        if (card.doMisplayAnimation) {
+        layoutChild.card.startedTweening();
+        layoutChild.card.setRaiseAndShadowOffset();
+        const animateToLayout = () => {
+          animate(layoutChild, {
+            duration: CARD_ANIMATION_LENGTH,
+            x: newX,
+            y: 0,
+            scale,
+            rotation: 0,
+            opacity: 1,
+            easing: Konva.Easings.EaseOut,
+            onFinish: () => {
+              layoutChild.card.finishedTweening();
+              layoutChild.checkSetDraggable();
+            },
+          }, !globals.options.speedrun);
+        };
+
+        if (layoutChild.doMisplayAnimation) {
           // If this card just misplayed, do a special animation
-          card.doMisplayAnimation = false;
-          node.rotation(360);
+          layoutChild.doMisplayAnimation = false;
+
+          const suit = globals.variant.suits[layoutChild.card.state.suitIndex!];
+          const playStack = globals.elements.playStacks.get(suit)!;
+          const pos = this.getAbsolutePosition();
+          const playStackPos = playStack.getAbsolutePosition();
+
+          animate(layoutChild, {
+            duration: CARD_ANIMATION_LENGTH,
+            x: playStackPos.x - pos.x,
+            y: playStackPos.y - pos.y,
+            scale: playStack.height() * scale / handHeight,
+            rotation: 0,
+            opacity: 1,
+            easing: Konva.Easings.EaseOut,
+            onFinish: () => {
+              layoutChild.rotation(360);
+              animateToLayout();
+            },
+          }, !globals.options.speedrun);
+        } else {
+          animateToLayout();
         }
-        node.tween = new Konva.Tween({
-          node,
-          duration: 0.5,
-          x: newX,
-          y: 0,
-          scaleX: scale,
-          scaleY: scale,
-          rotation: 0,
-          easing: Konva.Easings.EaseOut,
-          onFinish: () => {
-            if (!card || !node) {
-              return;
-            }
-            card.tweening = false;
-            node.checkSetDraggable();
-            if (!storedPostAnimationLayout) {
-              return;
-            }
-            storedPostAnimationLayout();
-          },
-        }).play();
       }
 
-      x += ((scale * node.width()) + dist) * (this.reverse ? -1 : 1);
+      x += ((scale * layoutChild.width()) + spacingBetweenCards) * (this.reverse ? -1 : 1);
     }
+  }
+
+  checkSetDraggableAll() {
+    this.children.each((layoutChild) => {
+      (layoutChild as unknown as LayoutChild).checkSetDraggable();
+    });
   }
 
   getAbsoluteCenterPos() {
@@ -165,28 +204,23 @@ export default class CardLayout extends Konva.Group {
     return pos;
   }
 
-  isLocked() {
-    for (const layoutChild of this.children.toArray() as Konva.Node[]) {
-      const card = layoutChild.children[0] as HanabiCard;
-      if (!card.isClued()) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  getChopIndex() {
-    const hand = this.children.toArray() as Konva.Node[];
-    for (let i = 0; i < hand.length; i++) {
-      const layoutChild = hand[i];
-      const card = layoutChild.children[0] as HanabiCard;
-      if (!card.isClued()) {
-        return i;
-      }
+  setEmpathy(enabled: boolean) {
+    if (enabled === this.empathy) {
+      // No change
+      return;
     }
 
-    // Their hand is filled with clued cards,
-    // so the chop is considered to be their newest (left-most) card
-    return hand.length - 1;
+    this.empathy = enabled;
+    this.children.each((layoutChild) => {
+      const card = layoutChild.children[0] as HanabiCard;
+
+      // As a sanity check, make sure that the card exists
+      // (it can be undefined sometimes when rewinding)
+      if (card === undefined) {
+        return;
+      }
+
+      card.setEmpathy(enabled);
+    });
   }
 }

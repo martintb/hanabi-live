@@ -5,35 +5,85 @@ import (
 	"os"
 	"path"
 	"strconv"
-	"strings"
 	"text/template"
 	"time"
 
 	"github.com/didip/tollbooth"
 	"github.com/didip/tollbooth_gin"
 	sentrygin "github.com/getsentry/sentry-go/gin"
+	"github.com/gin-contrib/gzip"
 	gsessions "github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
 )
 
 type TemplateData struct {
-	Title     string // Used to populate the <title> tag
-	Domain    string // Used to validate that the user is going to the correct URL
-	Version   int
-	Compiling bool // True if we are currently recompiling the TypeScript client
-	Dev       bool
+	// Shared
+	WebsiteName string
+	Title       string // Used to populate the "<title>" tag
+	Domain      string // Used to validate that the user is going to the correct URL
+	Version     int
+	Compiling   bool // True if we are currently recompiling the TypeScript client
+	WebpackPort int
+
+	// Profile
+	Name       string
+	NamesTitle string
+
+	// History
+	History      []*GameHistory
+	SpecificSeed bool
+	Tags         map[int][]string
+
+	// Scores
+	DateJoined                 string
+	NumGames                   int
+	TimePlayed                 string
+	NumGamesSpeedrun           int
+	TimePlayedSpeedrun         string
+	NumMaxScores               int
+	TotalMaxScores             int
+	PercentageMaxScores        string
+	RequestedNumPlayers        int      // Used on the "Missing Scores" page
+	NumMaxScoresPerType        []int    // Used on the "Missing Scores" page
+	PercentageMaxScoresPerType []string // Used on the "Missing Scores" page
+	SharedMissingScores        bool     // Used on the "Missing Scores" page
+	VariantStats               []*UserVariantStats
+
+	// Stats
+	NumVariants int
+	Variants    []*VariantStatsData
+
+	// Variants
+	BestScores    []int
+	MaxScoreRate  string
+	MaxScore      int
+	AverageScore  string
+	NumStrikeouts int
+	StrikeoutRate string
+	RecentGames   []*GameHistory
 }
 
 const (
 	// The name supplied to the Gin session middleware can be any arbitrary string
 	HTTPSessionName    = "hanabi.sid"
 	HTTPSessionTimeout = 60 * 60 * 24 * 365 // 1 year in seconds
+	HTTPReadTimeout    = 5 * time.Second
+	HTTPWriteTimeout   = 10 * time.Second
 )
 
 var (
 	domain       string
+	useTLS       bool
 	GATrackingID string
+	webpackPort  int
+
+	// HTTPClientWithTimeout is used for sending web requests to external sites,
+	// which is used in various middleware
+	// We don't want to use the default http.Client because it has no default timeout set
+	HTTPClientWithTimeout = &http.Client{
+		Timeout: HTTPWriteTimeout,
+	}
 )
 
 func httpInit() {
@@ -64,7 +114,6 @@ func httpInit() {
 	}
 	tlsCertFile := os.Getenv("TLS_CERT_FILE")
 	tlsKeyFile := os.Getenv("TLS_KEY_FILE")
-	useTLS := false
 	if len(tlsCertFile) != 0 && len(tlsKeyFile) != 0 {
 		useTLS = true
 		if port == 80 {
@@ -72,46 +121,54 @@ func httpInit() {
 		}
 	}
 	GATrackingID = os.Getenv("GA_TRACKING_ID")
+	webpackPortString := os.Getenv("WEBPACK_DEV_SERVER_PORT")
+	if len(webpackPortString) == 0 {
+		webpackPort = 8080
+	} else {
+		if v, err := strconv.Atoi(webpackPortString); err != nil {
+			logger.Fatal("Failed to convert the \"WEBPACK_DEV_SERVER_PORT\" environment variable to a number.")
+			return
+		} else {
+			webpackPort = v
+		}
+	}
 
 	// Create a new Gin HTTP router
-	gin.SetMode(gin.ReleaseMode) // Comment this out to debug HTTP stuff
-	httpRouter := gin.Default()  // Has the "Logger" and "Recovery" middleware attached
+	gin.SetMode(gin.ReleaseMode)                       // Comment this out to debug HTTP stuff
+	httpRouter := gin.Default()                        // Has the "Logger" and "Recovery" middleware attached
+	httpRouter.Use(gzip.Gzip(gzip.DefaultCompression)) // Add GZip compression middleware
 
 	// Attach rate-limiting middleware from Tollbooth
 	// The limiter works per path request,
 	// meaning that a user can only request one specific path every X seconds
 	// Thus, this does not impact the ability of a user to download CSS and image files all at once
-	limiter := tollbooth.NewLimiter(2, nil) // Limit each user to 2 requests per second
-	limiter.SetMessage(http.StatusText(http.StatusTooManyRequests))
-	limiterMiddleware := tollbooth_gin.LimitHandler(limiter)
-	httpRouter.Use(limiterMiddleware)
-
-	// Attach the Sentry middleware
-	if usingSentry {
-		httpRouter.Use(sentrygin.New(sentrygin.Options{}))
+	// (However, we do not want to use the rate-limiter in development, since we might have multiple
+	// tabs open that are automatically-refreshing with webpack-dev-server)
+	if !isDev {
+		limiter := tollbooth.NewLimiter(2, nil) // Limit each user to 2 requests per second
+		limiter.SetMessage(http.StatusText(http.StatusTooManyRequests))
+		limiterMiddleware := tollbooth_gin.LimitHandler(limiter)
+		httpRouter.Use(limiterMiddleware)
 	}
 
 	// Create a session store
 	httpSessionStore := cookie.NewStore([]byte(sessionSecret))
 	options := gsessions.Options{
-		Path:   "/",
-		Domain: domain,
-		// After getting a cookie via "/login", the client will immediately
-		// establish a WebSocket connection via "/ws", so the cookie only needs
-		// to exist for that time frame
+		Path:   "/",                // The cookie should apply to the entire domain
 		MaxAge: HTTPSessionTimeout, // In seconds
+	}
+	if !isDev {
+		// Bind the cookie to this specific domain for security purposes
+		options.Domain = domain
 		// Only send the cookie over HTTPS:
 		// https://www.owasp.org/index.php/Testing_for_cookies_attributes_(OTG-SESS-002)
-		Secure: true,
+		options.Secure = useTLS
 		// Mitigate XSS attacks:
 		// https://www.owasp.org/index.php/HttpOnly
-		HttpOnly: true,
+		options.HttpOnly = true
 		// Mitigate CSRF attacks:
 		// https://developer.mozilla.org/en-US/docs/Web/HTTP/Cookies#SameSite_cookies
-		SameSite: http.SameSiteStrictMode,
-	}
-	if !useTLS {
-		options.Secure = false
+		options.SameSite = http.SameSiteStrictMode
 	}
 	httpSessionStore.Options(options)
 
@@ -121,6 +178,16 @@ func httpInit() {
 	// Initialize Google Analytics
 	if len(GATrackingID) > 0 {
 		httpRouter.Use(httpGoogleAnalytics) // Attach the Google Analytics middleware
+	}
+
+	// Attach the Sentry middleware
+	if usingSentry {
+		httpRouter.Use(sentrygin.New(sentrygin.Options{
+			// https://github.com/getsentry/sentry-go/blob/master/gin/sentrygin.go
+			Repanic: true, // Recommended as per the documentation
+			Timeout: HTTPWriteTimeout,
+		}))
+		httpRouter.Use(sentryHTTPAttachMetadata)
 	}
 
 	// Path handlers (for cookies and logging in)
@@ -144,6 +211,7 @@ func httpInit() {
 	// Path handlers (for development)
 	// ("/dev" is the same as "/" but uses webpack-dev-server to serve JavaScript)
 	httpRouter.GET("/dev", httpMain)
+	httpRouter.GET("/dev/", httpMain)
 	httpRouter.GET("/dev/replay", httpMain)
 	httpRouter.GET("/dev/replay/:gameID", httpMain)
 	httpRouter.GET("/dev/replay/:gameID/:turn", httpMain)
@@ -153,13 +221,12 @@ func httpInit() {
 	httpRouter.GET("/dev/create-table", httpMain)
 	httpRouter.GET("/dev/test", httpMain)
 	httpRouter.GET("/dev/test/:testNum", httpMain)
-	httpRouter.GET("/dev2", httpMain) // Used for testing the new Phaser client
 
 	// Path handlers for other URLs
 	httpRouter.GET("/scores", httpScores)
-	httpRouter.GET("/scores/:player", httpScores)
+	httpRouter.GET("/scores/:player1", httpScores)
 	httpRouter.GET("/profile", httpScores) // "/profile" is an alias for "/scores"
-	httpRouter.GET("/profile/:player", httpScores)
+	httpRouter.GET("/profile/:player1", httpScores)
 	httpRouter.GET("/history", httpHistory)
 	httpRouter.GET("/history/:player1", httpHistory)
 	httpRouter.GET("/history/:player1/:player2", httpHistory)
@@ -167,8 +234,18 @@ func httpInit() {
 	httpRouter.GET("/history/:player1/:player2/:player3/:player4", httpHistory)
 	httpRouter.GET("/history/:player1/:player2/:player3/:player4/:player5", httpHistory)
 	httpRouter.GET("/history/:player1/:player2/:player3/:player4/:player5/:player6", httpHistory)
-	httpRouter.GET("/missing-scores", httpScores)
-	httpRouter.GET("/missing-scores/:player", httpScores)
+	httpRouter.GET("/missing-scores", httpMissingScores)
+	httpRouter.GET("/missing-scores/:player1", httpMissingScores)
+	httpRouter.GET("/missing-scores/:player1/:numPlayers", httpMissingScores)
+	httpRouter.GET("/shared-missing-scores", httpSharedMissingScores)
+	httpRouter.GET("/shared-missing-scores/:player1", httpSharedMissingScores)
+	httpRouter.GET("/shared-missing-scores/:player1/:player2", httpSharedMissingScores)
+	httpRouter.GET("/shared-missing-scores/:player1/:player2/:player3", httpSharedMissingScores)
+	httpRouter.GET("/shared-missing-scores/:player1/:player2/:player3/:player4", httpSharedMissingScores)
+	httpRouter.GET("/shared-missing-scores/:player1/:player2/:player3/:player4/:player5", httpSharedMissingScores)
+	httpRouter.GET("/shared-missing-scores/:player1/:player2/:player3/:player4/:player5/:player6", httpSharedMissingScores)
+	httpRouter.GET("/tags", httpTags)
+	httpRouter.GET("/tags/:player1", httpTags)
 	httpRouter.GET("/seed", httpSeed)
 	httpRouter.GET("/seed/:seed", httpSeed) // Display all games played on a given seed
 	httpRouter.GET("/stats", httpStats)
@@ -186,7 +263,7 @@ func httpInit() {
 
 	// Other
 	httpRouter.Static("/public", path.Join(projectPath, "public"))
-	httpRouter.StaticFile("/favicon.ico", path.Join(projectPath, "public", "img", "favicon.png"))
+	httpRouter.StaticFile("/favicon.ico", path.Join(projectPath, "public", "img", "favicon.ico"))
 
 	if useTLS {
 		// Create the LetsEncrypt directory structure
@@ -238,8 +315,8 @@ func httpInit() {
 			HTTPRedirectServerWithTimeout := &http.Server{
 				Addr:         "0.0.0.0:80", // Listen on all IP addresses
 				Handler:      HTTPServeMux,
-				ReadTimeout:  5 * time.Second,
-				WriteTimeout: 10 * time.Second,
+				ReadTimeout:  HTTPReadTimeout,
+				WriteTimeout: HTTPWriteTimeout,
 			}
 			if err := HTTPRedirectServerWithTimeout.ListenAndServe(); err != nil {
 				logger.Fatal("ListenAndServe failed to start on port 80.")
@@ -256,8 +333,8 @@ func httpInit() {
 	HTTPServerWithTimeout := &http.Server{
 		Addr:         "0.0.0.0:" + strconv.Itoa(port), // Listen on all IP addresses
 		Handler:      httpRouter,
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		ReadTimeout:  HTTPReadTimeout,
+		WriteTimeout: HTTPWriteTimeout,
 	}
 	if useTLS {
 		if err := HTTPServerWithTimeout.ListenAndServeTLS(tlsCertFile, tlsKeyFile); err != nil {
@@ -276,9 +353,14 @@ func httpInit() {
 
 // httpServeTemplate combines a standard HTML header with the body for a specific page
 // (we want the same HTML header for all pages)
-func httpServeTemplate(w http.ResponseWriter, data interface{}, templateName ...string) {
+func httpServeTemplate(w http.ResponseWriter, data TemplateData, templateName ...string) {
+	// Since we are using the GZip middleware, we have to specify the content type,
+	// or else the page will be downloaded by the browser as "download.gz"
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
 	viewsPath := path.Join(projectPath, "server", "src", "views")
 	layoutPath := path.Join(viewsPath, "layout.tmpl")
+	logoPath := path.Join(viewsPath, "logo.tmpl")
 
 	// Turn the slice of file names into a slice of full paths
 	for i := 0; i < len(templateName); i++ {
@@ -308,9 +390,14 @@ func httpServeTemplate(w http.ResponseWriter, data interface{}, templateName ...
 	// Append the main layout to our list of layouts
 	templateName = append(templateName, layoutPath)
 
+	// Append the nav bar logo to our list of layouts
+	templateName = append(templateName, logoPath)
+
 	// Create the template
 	var tmpl *template.Template
-	if v, err := template.ParseFiles(templateName...); err != nil {
+	if v, err := template.New("template").Funcs(template.FuncMap{
+		"formatDate": httpFormatDate,
+	}).ParseFiles(templateName...); err != nil {
 		logger.Error("Failed to create the template:", err.Error())
 		http.Error(
 			w,
@@ -322,17 +409,12 @@ func httpServeTemplate(w http.ResponseWriter, data interface{}, templateName ...
 		tmpl = v
 	}
 
+	// Add extra data that should be the same for every page request
+	data.WebsiteName = WebsiteName
+
 	// Execute the template and send it to the user
 	if err := tmpl.ExecuteTemplate(w, "layout", data); err != nil {
-		if strings.HasSuffix(err.Error(), "client disconnected") ||
-			strings.HasSuffix(err.Error(), "http2: stream closed") ||
-			strings.HasSuffix(err.Error(), "write: broken pipe") ||
-			strings.HasSuffix(err.Error(), "write: connection reset by peer") ||
-			strings.HasSuffix(err.Error(), "write: connection timed out") ||
-			strings.HasSuffix(err.Error(), "i/o timeout") {
-
-			// Some errors are common and expected
-			// (e.g. the user presses the "Stop" button while the template is executing)
+		if isCommonHTTPError(err.Error()) {
 			logger.Info("Ordinary error when executing the template: " + err.Error())
 		} else {
 			logger.Error("Failed to execute the template: " + err.Error())
@@ -343,4 +425,8 @@ func httpServeTemplate(w http.ResponseWriter, data interface{}, templateName ...
 			http.StatusInternalServerError,
 		)
 	}
+}
+
+func httpFormatDate(date time.Time) string {
+	return date.Format("2006-01-02 &mdash; 15:04:05 MST")
 }

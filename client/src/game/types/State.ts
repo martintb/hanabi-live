@@ -1,82 +1,31 @@
-import * as deck from '../rules/deck';
-import { MAX_CLUE_NUM } from './constants';
-import StackDirection from './StackDirection';
-import Variant from './Variant';
+import CardIdentity from './CardIdentity';
+import ClientAction from './ClientAction';
+import GameMetadata from './GameMetadata';
+import GameState from './GameState';
+import PauseState from './PauseState';
+import ReplayState from './ReplayState';
+import Spectator from './Spectator';
 
 export default interface State {
-  // Using a string instead of an object to keep this object
-  // as flat as possible since it is cloned often
-  readonly variantName: Variant['name'],
-  readonly log: string[], // TODO set to action log message object
-  readonly deck: StateCard[],
-  readonly deckSize: number,
-  readonly score: number,
-  readonly maxScore: number,
-  readonly clueTokens: number,
-  readonly doubleDiscard: boolean,
-  readonly strikes: StateStrike[],
-  readonly pace: number,
-  readonly currentPlayerIndex: number,
-  readonly hands: number[][],
-  readonly playStacks: number[][],
-  readonly playStacksDirections: StackDirection[],
-  readonly discardStacks: number[][],
-  readonly clues: StateClue[],
-}
+  readonly visibleState: GameState | null; // Null during initialization
+  readonly ongoingGame: GameState; // In a replay, this is the state of the final turn
+  readonly replay: ReplayState;
 
-export const initialState = (variant: Variant, playerCount: number) => {
-  const state: State = {
-    variantName: variant.name,
-    log: [],
-    deck: [],
-    deckSize: deck.totalCards(variant),
-    score: 0,
-    maxScore: variant.maxScore,
-    clueTokens: MAX_CLUE_NUM,
-    doubleDiscard: false,
-    strikes: [],
-    pace: 0,
-    currentPlayerIndex: 0,
-    hands: [],
-    playStacks: [],
-    playStacksDirections: [],
-    discardStacks: [],
-    clues: [],
-  };
+  // Equal to true if we are playing in an ongoing game
+  // Equal to false is we are spectating an ongoing game, in a dedicated solo replay,
+  // or in a shared replay
+  readonly playing: boolean;
 
-  for (let i = 0; i < playerCount; i++) {
-    state.hands.push([]);
-  }
-  for (let i = 0; i < variant.suits.length; i++) {
-    state.playStacksDirections.push(StackDirection.Undecided);
-    state.playStacks.push([]);
-    state.discardStacks.push([]);
-  }
+  // Equal to true if we are in a dedicated solo replay or a shared replay
+  readonly finished: boolean;
 
-  return state;
-};
+  readonly metadata: GameMetadata;
 
-interface StateCard {
-  readonly suit: number;
-  readonly rank: number;
-  readonly clues: StateCardClue[];
-}
+  readonly datetimeStarted: string | null;
+  readonly datetimeFinished: string | null;
 
-interface StateStrike {
-  readonly order: number;
-  readonly turn: number;
-}
-
-interface StateClue {
-  readonly type: number;
-  readonly value: number;
-  readonly giver: number;
-  readonly target: number;
-  readonly turn: number;
-}
-
-interface StateCardClue {
-  readonly type: number;
-  readonly value: number;
-  readonly positive: boolean;
+  readonly cardIdentities: readonly CardIdentity[];
+  readonly premove: ClientAction | null;
+  readonly pause: PauseState;
+  readonly spectators: Spectator[];
 }

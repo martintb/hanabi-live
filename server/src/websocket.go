@@ -11,10 +11,14 @@ var (
 	m *melody.Melody
 
 	// We keep track of all WebSocket sessions
-	sessions = make(map[int]*Session)
+	sessions      = make(map[int]*Session)
+	sessionsMutex = sync.RWMutex{}
 
-	// The WebSocket server needs to processes one action at a time; otherwise, there would be chaos
-	commandMutex = sync.Mutex{}
+	// We only allow one user to connect or disconnect at the same time
+	sessionConnectMutex = sync.Mutex{}
+
+	// We keep track of all ongoing WebSocket messages/commands
+	commandWaitGroup sync.WaitGroup
 )
 
 func websocketInit() {
@@ -26,7 +30,7 @@ func websocketInit() {
 	m = melody.New()
 
 	// The default maximum message size is 512 bytes,
-	// but this is not long enough to send Hanabi game objects
+	// but this is not long enough to send game objects
 	// Thus, we have to manually increase it
 	m.Config.MaxMessageSize = 8192
 

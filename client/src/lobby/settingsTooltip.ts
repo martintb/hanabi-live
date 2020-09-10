@@ -1,21 +1,20 @@
 // The "Settings" nav button
 
-// Imports
 import globals from '../globals';
-import * as misc from '../misc';
+import { isKeyOf, parseIntSafe } from '../misc';
 import * as notifications from '../notifications';
 
 export const init = () => {
-  $('#settings-volume-slider').change(function settingsVolumeSliderChange() {
+  $('#settings-volume-slider').change(function settingsVolumeSliderChange(this: HTMLElement) {
     const element = $(this);
-    if (!element) {
+    if (element === undefined) {
       throw new Error('Failed to get the "settings-volume-slider" element.');
     }
     const volumeString = element.val();
     if (typeof volumeString !== 'string') {
       throw new Error('The value of the "settings-volume-slider" element is not a string.');
     }
-    const volume = parseInt(volumeString, 10);
+    const volume = parseIntSafe(volumeString);
     globals.settings.volume = volume;
     $('#settings-volume-slider-value').html(`${volume}%`);
     globals.conn!.send('setting', {
@@ -27,14 +26,14 @@ export const init = () => {
   $('#settings-volume-test').click(() => {
     const audio = new Audio('/public/sounds/turn_us.mp3');
     const element = $('#settings-volume-slider');
-    if (!element) {
+    if (element === undefined) {
       throw new Error('Failed to get the "settings-volume-slider" element.');
     }
     const volumeString = element.val();
     if (typeof volumeString !== 'string') {
       throw new Error('The value of the "settings-volume-slider" element is not a string.');
     }
-    const volume = parseInt(volumeString, 10);
+    const volume = parseIntSafe(volumeString);
     audio.volume = volume / 100;
     audio.play();
   });
@@ -55,7 +54,7 @@ export const setSettingsTooltip = () => {
       $('#settings-volume-slider-value').html(`${value}%`);
     } else {
       const element = $(`#${setting}`);
-      if (!element) {
+      if (element === undefined) {
         throw new Error(`Failed to get the "${setting}" element.`);
       }
       if (typeof value !== 'boolean') {
@@ -69,14 +68,14 @@ export const setSettingsTooltip = () => {
 
 function changeSetting(this: HTMLElement) {
   const element = $(this);
-  if (!element) {
+  if (element === undefined) {
     throw new Error('Failed to get the element in the "changeSetting()" function.');
   }
   const settingName = element.attr('id');
-  if (!settingName) {
+  if (settingName === undefined || settingName === '') {
     throw new Error('Failed to get the ID of the element in the "changeSetting()" function.');
   }
-  if (!misc.isKeyOf(settingName, globals.settings)) {
+  if (!isKeyOf(settingName, globals.settings)) {
     throw new Error(`The setting of ${settingName} does not exist in the Settings class.`);
   }
   const setting = globals.settings[settingName];

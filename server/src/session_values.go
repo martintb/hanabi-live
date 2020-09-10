@@ -7,17 +7,17 @@ import (
 	"time"
 )
 
-func (s *Session) SessionID() int {
+func (s *Session) SessionID() uint64 {
 	if s == nil {
 		logger.Error("The \"SessionID\" method was called for a nil session.")
-		return -1
+		return 0
 	}
 
 	if v, exists := s.Get("sessionID"); !exists {
 		logger.Error("Failed to get \"SessionID\" from a session.")
-		return -1
+		return 0
 	} else {
-		return v.(int)
+		return v.(uint64)
 	}
 }
 
@@ -77,6 +77,20 @@ func (s *Session) Status() int {
 	}
 }
 
+func (s *Session) TableID() uint64 {
+	if s == nil {
+		logger.Error("The \"TableID\" method was called for a nil session.")
+		return 0
+	}
+
+	if v, exists := s.Get("tableID"); !exists {
+		logger.Error("Failed to get \"tableID\" from a session.")
+		return 0
+	} else {
+		return v.(uint64)
+	}
+}
+
 func (s *Session) Friends() map[int]struct{} {
 	if s == nil {
 		logger.Error("The \"Friends\" method was called for a nil session.")
@@ -102,6 +116,20 @@ func (s *Session) ReverseFriends() map[int]struct{} {
 		return make(map[int]struct{})
 	} else {
 		return v.(map[int]struct{})
+	}
+}
+
+func (s *Session) Hyphenated() bool {
+	if s == nil {
+		logger.Error("The \"Hyphenated\" method was called for a nil session.")
+		return false
+	}
+
+	if v, exists := s.Get("hyphenated"); !exists {
+		logger.Error("Failed to get \"hyphenated\" from a session.")
+		return false
+	} else {
+		return v.(bool)
 	}
 }
 

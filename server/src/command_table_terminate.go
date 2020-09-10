@@ -13,24 +13,18 @@ import (
 //   server: true, // True if a server-initiated termination, otherwise omitted
 // }
 func commandTableTerminate(s *Session, d *CommandData) {
-	/*
-		Validate
-	*/
-
-	// Validate that the table exists
-	tableID := d.TableID
-	var t *Table
-	if v, ok := tables[tableID]; !ok {
-		s.Warning("Table " + strconv.Itoa(tableID) + " does not exist.")
+	t, exists := getTableAndLock(s, d.TableID, !d.NoLock)
+	if !exists {
 		return
-	} else {
-		t = v
+	}
+	if !d.NoLock {
+		defer t.Mutex.Unlock()
 	}
 
 	// Validate that they are in the game
-	i := t.GetPlayerIndexFromID(s.UserID())
-	if i == -1 {
-		s.Warning("You are not playing at table " + strconv.Itoa(tableID) + ", " +
+	playerIndex := t.GetPlayerIndexFromID(s.UserID())
+	if playerIndex == -1 {
+		s.Warning("You are not playing at table " + strconv.FormatUint(t.ID, 10) + ", " +
 			"so you cannot terminate it.")
 		return
 	}
@@ -47,41 +41,15 @@ func commandTableTerminate(s *Session, d *CommandData) {
 		return
 	}
 
-	/*
-		Terminate
-	*/
-
-	username := s.Username()
-	if d.Server {
-		username = "Hanabi Live"
-	}
-	terminate(t, username, i)
+	terminate(s, t, playerIndex)
 }
 
-func terminate(t *Table, username string, endPlayerIndex int) {
-	// Local variables
-	g := t.Game
-
-	// We want to set the end condition before advancing the turn to ensure that
-	// no active player will show
-	g.EndCondition = EndConditionTerminated
-	g.EndPlayer = endPlayerIndex
-
-	// Add a text message for the termination
-	// and put it on its own turn so that it is separate from the final times
-	text := username + " terminated the game!"
-	g.Actions = append(g.Actions, ActionText{
-		Type: "text",
-		Text: text,
+func terminate(s *Session, t *Table, playerIndex int) {
+	commandAction(s, &CommandData{ // Manual invocation
+		TableID: t.ID,
+		Type:    ActionTypeEndGame,
+		Target:  playerIndex,
+		Value:   EndConditionTerminated,
+		NoLock:  true,
 	})
-	t.NotifyGameAction()
-	g.Turn++
-	t.NotifyTurn()
-
-	// Play a sound to indicate that the game was terminated
-	g.Sound = "finished_fail"
-	t.NotifySound()
-
-	// End the game and write it to the database
-	g.End()
 }

@@ -1,8 +1,11 @@
 #!/bin/bash
 
 # Redirect all output to syslog
+# (but skip this if we are on Windows)
 # https://www.urbanautomaton.com/blog/2014/09/09/redirecting-bash-script-output-to-syslog/
-exec 1> >(logger -s -t $(basename $0)) 2>&1
+if uname -a | grep -v MINGW64 >/dev/null 2>&1; then
+  exec 1> >(logger -s -t $(basename $0)) 2>&1
+fi
 
 # Get the directory of this script
 # https://stackoverflow.com/questions/59895/getting-the-source-directory-of-a-bash-script-from-within
@@ -17,7 +20,12 @@ BACKUPS_DIR="$DIR/backups"
 FILENAME=$REPO-`date +%s`.sql # "date +%s" returns the epoch timestamp
 
 # Import the database information
-source "$DIR/.env"
+ENV_PATH="$DIR/.env"
+if [[ ! -f $ENV_PATH ]]; then
+  echo "Failed to find the \".env\" file at: $ENV_PATH"
+  exit 1
+fi
+source "$ENV_PATH"
 if [[ -z $DB_HOST ]]; then
   DB_HOST=localhost
 fi

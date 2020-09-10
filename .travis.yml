@@ -5,41 +5,56 @@
 # https://stackoverflow.com/questions/27644586/how-to-set-up-travis-ci-with-multiple-languages
 matrix:
   include:
-    - language: node_js
+    - name: Job 1 - Client
+      language: node_js
       node_js:
+        # Use the latest stable Node.js release
         - node
       before_script:
-        # Install the JavaScript tooling (TypeScript, Webpack, ESLint, etc.)
-        - echo "Installing NPM modules..."
         - cd client
-        - npm install
+        #- echo "Installing environment variables..."
+        #- cp .env_template .env
+        - echo "Installing ESLint (the TypeScript linter) and the Airbnb rules..."
+        - ./install_client_linter.sh
       script:
         - echo "Building the client..."
         - ./build_client.sh
         - echo "Linting the client code..."
         - ./lint_client.sh
-        - echo "Running tests..."
+        - echo "Running client tests..."
         - npm test
 
-    - language: go
+    - name: Job 2 - Server
+      language: go
       go:
-        # This will automatically choose the latest released Go version
-        - 1.x
+        # "1.x" will automatically choose the latest released Go version
+        # Version 1.15 fails for some reason
+        - 1.14
       env:
         # This is needed so that Travis will use the "go.mod" file
         - GO111MODULE=on
       before_script:
-        # Install the Go linter
-        # https://github.com/golangci/golangci-lint
-        - echo "Installing golangci-lint (the Go linter)..."
         - cd server
-        - source .golangci-lint.version
-        - curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin $GOLANGCI_LINT_VERSION
+        - echo "Installing golangci-lint (the Go linter)..."
+        - ./install_server_linter.sh
       script:
         - echo "Building the server..."
         - ./build_server.sh
         - echo "Linting the server code..."
         - ./lint_server.sh
+
+    - name: Job 3 - Spell Check
+      language: node_js
+      node_js:
+        # Use the latest stable Node.js release
+        - node
+      before_script:
+        - cd spell_check
+        - echo "Installing NPM modules..."
+        - npm install
+      script:
+        - echo "Spell checking the entire project..."
+        - ./spell_check.sh
 
 notifications:
   email:

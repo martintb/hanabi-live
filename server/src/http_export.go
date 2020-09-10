@@ -58,8 +58,8 @@ func httpExport(c *gin.Context) {
 
 	// Make a list of their names
 	playerNames := make([]string, 0)
-	for _, p := range dbPlayers {
-		playerNames = append(playerNames, p.Name)
+	for _, dbP := range dbPlayers {
+		playerNames = append(playerNames, dbP.Name)
 	}
 
 	// Get the options from the database
@@ -101,17 +101,8 @@ func httpExport(c *gin.Context) {
 		Seed:         seed,
 	}
 	g.InitDeck()
-	g.InitSeed()
+	setSeed(g.Seed) // Seed the random number generator
 	g.ShuffleDeck()
-
-	// Create a list of cards in the deck
-	deck := make([]SimpleCard, 0)
-	for _, c := range g.Deck {
-		deck = append(deck, SimpleCard{
-			Suit: c.Suit,
-			Rank: c.Rank,
-		})
-	}
 
 	// Get the actions from the database
 	var actions []*GameAction
@@ -129,7 +120,7 @@ func httpExport(c *gin.Context) {
 	}
 
 	// Get the notes from the database
-	variant := variants[g.Options.Variant]
+	variant := variants[g.Options.VariantName]
 	noteSize := variant.GetDeckSize() + len(variant.Suits)
 	var notes [][]string
 	if v, err := models.Games.GetNotes(gameID, len(dbPlayers), noteSize); err != nil {
@@ -162,15 +153,9 @@ func httpExport(c *gin.Context) {
 
 	// If this was a game with the "Detrimental Characters" option turned on,
 	// make a list of the characters for each player
-	var playerCharacters []*CharacterJSON
+	var characterAssignments []*CharacterAssignment
 	if options.DetrimentalCharacters {
-		playerCharacters = make([]*CharacterJSON, 0)
-		for _, p := range dbPlayers {
-			playerCharacters = append(playerCharacters, &CharacterJSON{
-				Name:     charactersID[p.CharacterAssignment],
-				Metadata: p.CharacterMetadata,
-			})
-		}
+		characterAssignments = getCharacterAssignmentsFromDBPlayers(dbPlayers)
 	}
 
 	// Create JSON options
@@ -182,7 +167,7 @@ func httpExport(c *gin.Context) {
 		optionsJSON.StartingPlayer = &options.StartingPlayer
 		allDefaultOptions = false
 	}
-	if options.Variant != "No Variant" {
+	if options.VariantName != "No Variant" {
 		optionsJSON.Variant = &variant.Name
 		allDefaultOptions = false
 	}
@@ -232,11 +217,12 @@ func httpExport(c *gin.Context) {
 	gameJSON := &GameJSON{
 		ID:         gameID,
 		Players:    playerNames,
-		Deck:       deck,
+		Deck:       g.CardIdentities,
 		Actions:    actions,
 		Options:    optionsJSON,
 		Notes:      notes,
-		Characters: playerCharacters,
+		Characters: characterAssignments,
+		Seed:       seed,
 	}
 
 	c.JSON(http.StatusOK, gameJSON)

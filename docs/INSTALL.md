@@ -1,6 +1,6 @@
-# Hanabi Live Installation
+# Hanab Live Installation
 
-If you just want to install Hanabi Live without the ability to edit the code, skip to [the production installation section](#installation-for-production-linux).
+If you just want to install the website without the ability to edit the code, skip to [the production installation section](#installation-for-production-linux).
 
 Like many code projects, we use [linters](https://en.wikipedia.org/wiki/Lint_(software)) to ensure that all of the code is written consistently and error-free. For Golang (the server-side code), we use [golangci-lint](https://github.com/golangci/golangci-lint). For TypeScript (the client-side code), we use [ESLint](https://eslint.org/) and have a configuration based on the [Airbnb style guide](https://github.com/airbnb/javascript). We ask that all pull requests pass our linting rules.
 
@@ -64,9 +64,9 @@ If you want to install less stuff on your computer, you can alternatively follow
   * `\q`
 * Clone the repository:
   * `cd [the path where you want the code to live]` (optional)
-  * If you already have an SSH keypair and have the public key attached to your GitHub profile, then use the following command to clone the repostory via SSH:
+  * If you already have an SSH key pair and have the public key attached to your GitHub profile, then use the following command to clone the repository via SSH:
     * `git clone git@github.com:Zamiell/hanabi-live.git`
-  * If you do not already have an SSH keypair, then use the following command to clone the repository via HTTPS:
+  * If you do not already have an SSH key pair, then use the following command to clone the repository via HTTPS:
     * `git clone https://github.com/Zamiell/hanabi-live.git`
   * Or, if you are doing development work, then clone your forked version of the repository. For example:
     * `git clone https://github.com/[Your_Username]/hanabi-live.git`
@@ -88,7 +88,7 @@ If you want to install less stuff on your computer, you can alternatively follow
 * In the bottom-right-hand corner, click on "Analysis Tools Missing" and then on "Install". You will know that it has finished once it displays: "All tools successfully installed."
 * Test the Golang linter:
   * On the left pane, navigate to and open "src\main.go".
-  * If you get a popup asking to use any experimental features (e.g. gopls), ignore it and/or do not allow it to proceed.
+  * If you get a pop-up asking to use any experimental features (e.g. gopls), ignore it and/or do not allow it to proceed.
   * Add a new line of "test" somewhere, save the file, and watch as some "Problems" appear in the bottom pane.
   * Add a blank line somewhere, save the file, and watch as the blank line is automatically removed (because VSCode will automatically run the "goimports" tool every time you save a file).
 * Test the TypeScript linter:
@@ -131,9 +131,9 @@ If you want to install less stuff on your computer, you can alternatively follow
   * `\q`
 * Clone the repository:
   * `cd [the path where you want the code to live]` (optional)
-  * If you already have an SSH keypair and have the public key attached to your GitHub profile, then use the following command to clone the repostory via SSH:
+  * If you already have an SSH key pair and have the public key attached to your GitHub profile, then use the following command to clone the repository via SSH:
     * `git clone git@github.com:Zamiell/hanabi-live.git`
-  * If you do not already have an SSH keypair, then use the following command to clone the repository via HTTPS:
+  * If you do not already have an SSH key pair, then use the following command to clone the repository via HTTPS:
     * `git clone https://github.com/Zamiell/hanabi-live.git`
   * Or, if you are doing development work, then clone your forked version of the repository. For example:
     * `git clone https://github.com/[Your_Username]/hanabi-live.git`
@@ -152,7 +152,7 @@ If you want to install less stuff on your computer, you can alternatively follow
 * In the bottom-right-hand corner, click on "Analysis Tools Missing" and then on "Install". You will know that it has finished once it displays: "All tools successfully installed."
 * Test the Golang linter:
   * On the left pane, navigate to and open "src\main.go".
-  * If you get a popup asking to use any experimental features (e.g. gopls), ignore it and/or do not allow it to proceed.
+  * If you get a pop-up asking to use any experimental features (e.g. gopls), ignore it and/or do not allow it to proceed.
   * Add a new line of "testing" somewhere, save the file, and watch as some "Problems" appear in the bottom pane.
   * Add a blank line somewhere, save the file, and watch as the blank line is automatically removed (because VSCode will automatically run the "goimports" tool every time you save a file).
 * Test the TypeScript linter:
@@ -200,9 +200,9 @@ These instructions assume you are running Ubuntu 20.04 LTS. Some adjustments may
   (this installs the latest version)
 * Clone the server:
   * `cd /root` (or change to the path where you want the code to live; "/root" is recommended)
-  * If you already have an SSH keypair and have the public key attached to your GitHub profile, then use the following command to clone the repostory via SSH:
+  * If you already have an SSH key pair and have the public key attached to your GitHub profile, then use the following command to clone the repository via SSH:
     * `git clone git@github.com:Zamiell/hanabi-live.git`
-  * If you do not already have an SSH keypair, then use the following command to clone the repository via HTTPS:
+  * If you do not already have an SSH key pair, then use the following command to clone the repository via HTTPS:
     * `git clone https://github.com/Zamiell/hanabi-live.git`
   * `cd hanabi-live`
 * Install the project dependencies:
@@ -237,7 +237,7 @@ These instructions assume you are running Ubuntu 20.04 LTS. Some adjustments may
 
 This assumes that you installed the server to "/root/hanabi-live". If not, you will need to edit the paths in the below commands and edit the contents of the three Supervisor files.
 
-* Install Supervisor and install the Hanabi Live service:
+* Install Supervisor and install the service:
   * `./install/install_supervisor.sh`
 
 To manage the service:
@@ -282,31 +282,31 @@ This assumes you installed the server to "/root/hanabi-live". Adjust if needed.
 
 #### Install HTTPS (optional)
 
-This assumes that your domain names are "hanabi.live" and "www.hanabi.live". It also assumes that you installed the server to "/root/hanabi-live". Adjust if needed.
+Adjust the "certbot" command below according to what domain names you want to register.
 
 * `sudo apt install certbot -y`
-* `certbot certonly --standalone -d hanabi.live -d www.hanabi.live` <br />
-  (this creates "/etc/letsencrypt/live/hanabi.live/")
+* `certbot certonly --standalone -d hanab.live -d www.hanab.live -d hanabi.live -d www.hanabi.live -d fireworks.cards -d www.fireworks.cards` <br />
+  (this creates "/etc/letsencrypt/live/hanab.live/")
 * In the `.env` file:
-  * Set `TLS_CERT_FILE` to: `/etc/letsencrypt/live/hanabi.live/fullchain.pem`
-  * Set `TLS_KEY_FILE` to: `/etc/letsencrypt/live/hanabi.live/privkey.pem`
+  * Set `TLS_CERT_FILE` to: `/etc/letsencrypt/live/hanab.live/fullchain.pem`
+  * Set `TLS_KEY_FILE` to: `/etc/letsencrypt/live/hanab.live/privkey.pem`
 * `crontab -e`
 
 ```
 # Every day, keep the Let's Encrypt certificate up to date
-0 0 * * * /root/hanabi-live/renew_cert.sh
+0 0 * * * /root/hanab-live/renew_cert.sh
 ```
 
 <br />
 
 ## Installation (Docker)
 
-Docker is **not supported** as an official installation method. However, we provide a [docker-compose.yml](../docker-compose.yml) file which runs PostgreSQL and the Golang backend inside of networked Docker containers, if you so choose.
+Docker is **not supported** as an official installation method. However, we provide a [docker-compose.yml](../docker-compose.yml) file which runs PostgreSQL and the Golang back-end inside of networked Docker containers, if you so choose.
 
 * [Install Docker](https://docs.docker.com/get-docker/).
 * Run `docker-compose up --build` to build and run the server.
   * The database will be automatically initialized when the server is first run, and will persist in a local directory called `mysql_data`.
-* Run `webpack-dev-server.sh`, as above, to build the frontend.
+* Run `webpack-dev-server.sh`, as above, to build the front-end.
 * Visit "http://localhost:8081/dev".
 
 <br />
@@ -320,3 +320,4 @@ Docker is **not supported** as an official installation method. However, we prov
 * If you change any of the Golang code, then you must restart the server for the changes to take effect.
 * If you change any of the TypeScript or CSS, then you will need to re-run the `build_client.sh` script in order to re-bundle it into `main.min.js` and `main.min.css`. (This step does not require a server restart, but you will need to perform a hard cache refresh in the browser.)
   * Alternatively, if you are actively changing or developing the TypeScript, leave the `webpack-dev-server.sh` script running and go to "https://localhost/dev". This way, the code will be automatically compiled whenever you change a file and the page will automatically refresh.
+* If you change any CSS, you might need to run `build_client.sh crit` to re-generate the critical CSS, which is necessary for the content the users see first. The "crit" version takes longer than `build_client.sh`, so you only need to run it once before committing your changes.

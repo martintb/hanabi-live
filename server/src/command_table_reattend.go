@@ -11,24 +11,18 @@ import (
 //   tableID: 31,
 // }
 func commandTableReattend(s *Session, d *CommandData) {
-	/*
-		Validation
-	*/
-
-	// Validate that the table exists
-	tableID := d.TableID
-	var t *Table
-	if v, ok := tables[tableID]; !ok {
-		s.Warning("Table " + strconv.Itoa(tableID) + " does not exist.")
+	t, exists := getTableAndLock(s, d.TableID, !d.NoLock)
+	if !exists {
 		return
-	} else {
-		t = v
+	}
+	if !d.NoLock {
+		defer t.Mutex.Unlock()
 	}
 
 	// Validate that they are at the table
-	i := t.GetPlayerIndexFromID(s.UserID())
-	if i == -1 {
-		s.Warning("You are not playing at table " + strconv.Itoa(tableID) + ", " +
+	playerIndex := t.GetPlayerIndexFromID(s.UserID())
+	if playerIndex == -1 {
+		s.Warning("You are not playing at table " + strconv.FormatUint(t.ID, 10) + ", " +
 			"so you cannot reattend it.")
 		return
 	}
@@ -39,10 +33,10 @@ func commandTableReattend(s *Session, d *CommandData) {
 		return
 	}
 
-	/*
-		Reattend
-	*/
+	tableReattend(s, t, playerIndex)
+}
 
+func tableReattend(s *Session, t *Table, playerIndex int) {
 	logger.Info(t.GetName() + "User \"" + s.Username() + "\" reattended.")
 
 	if t.Running {
@@ -52,17 +46,12 @@ func commandTableReattend(s *Session, d *CommandData) {
 		// Set their "present" variable back to true,
 		// which will remove the "AWAY" if the game has not started yet
 		// (if the game is running, this is handled in the "getGameInfo2()" function)
-		p := t.Players[i]
+		p := t.Players[playerIndex]
 		p.Present = true
 		t.NotifyPlayerChange()
 
 		// Let the client know they successfully joined the table
-		type JoinedMessage struct {
-			ID int `json:"tableID"`
-		}
-		s.Emit("joined", &JoinedMessage{
-			ID: tableID,
-		})
+		s.NotifyTableJoined(t)
 
 		// Send them the chat history for this game
 		// (if the game is running, this is handled in the "getGameInfo2()" function)
@@ -78,6 +67,7 @@ func commandTableReattend(s *Session, d *CommandData) {
 			status = StatusPregame
 		}
 		s.Set("status", status)
+		s.Set("tableID", t.ID)
 		notifyAllUser(s)
 	}
 }

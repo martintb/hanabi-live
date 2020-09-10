@@ -1,11 +1,9 @@
 // Modals (boxes that hover on top of the UI)
 
-// Imports
 import { FADE_TIME } from './constants';
-import * as gameChat from './game/chat';
 import globals from './globals';
 import * as lobbyNav from './lobby/nav';
-import * as misc from './misc';
+import { closeAllTooltips, parseIntSafe } from './misc';
 import * as sounds from './sounds';
 
 // The list of all of the modals
@@ -32,17 +30,7 @@ export const init = () => {
 
   // Warning
   $('#warning-modal-button').click(() => {
-    $('#warning-modal').fadeOut(FADE_TIME);
-    if ($('#lobby').is(':visible')) {
-      $('#lobby').fadeTo(FADE_TIME, 1, () => {
-        globals.modalShowing = false;
-      });
-    }
-    if ($('#game').is(':visible')) {
-      $('#game').fadeTo(FADE_TIME, 1, () => {
-        globals.modalShowing = false;
-      });
-    }
+    warningClose();
   });
 
   // Error
@@ -52,8 +40,8 @@ export const init = () => {
 };
 
 export const passwordShow = (tableID: number) => {
-  $('#lobby').fadeTo(FADE_TIME, 0.25);
-  misc.closeAllTooltips();
+  setShadeOpacity(0.75);
+  closeAllTooltips();
   globals.modalShowing = true;
 
   $('#password-modal-id').val(tableID);
@@ -63,14 +51,12 @@ export const passwordShow = (tableID: number) => {
 
 const passwordSubmit = () => {
   $('#password-modal').fadeOut(FADE_TIME);
-  $('#lobby').fadeTo(FADE_TIME, 1, () => {
-    globals.modalShowing = false;
-  });
+  setShadeOpacity(0, false);
   const tableIDString = $('#password-modal-id').val();
   if (typeof tableIDString !== 'string') {
     throw new Error('The "password-modal-id" element does not have a string value.');
   }
-  const tableID = parseInt(tableIDString, 10); // The server expects this as a number
+  const tableID = parseIntSafe(tableIDString); // The server expects this as a number
   let password = $('#password-modal-password').val();
   if (typeof password === 'number') {
     password = password.toString();
@@ -82,17 +68,13 @@ const passwordSubmit = () => {
     tableID,
     password,
   });
+
+  // Record the password in local storage (cookie)
+  localStorage.setItem('joinTablePassword', password);
 };
 
 export const warningShow = (msg: string) => {
-  if ($('#lobby').is(':visible')) {
-    $('#lobby').fadeTo(FADE_TIME, 0.25);
-  }
-  if ($('#game').is(':visible')) {
-    $('#game').fadeTo(FADE_TIME, 0.25);
-  }
-  misc.closeAllTooltips();
-  gameChat.hide();
+  setShadeOpacity(0.75);
   globals.modalShowing = true;
 
   $('#warning-modal-description').html(msg);
@@ -101,19 +83,12 @@ export const warningShow = (msg: string) => {
 
 export const errorShow = (msg: string) => {
   // Do nothing if we are already showing the error modal
-  if (globals.errorOccured) {
+  if (globals.errorOccurred) {
     return;
   }
-  globals.errorOccured = true;
+  globals.errorOccurred = true;
 
-  if ($('#lobby').is(':visible')) {
-    $('#lobby').fadeTo(FADE_TIME, 0.1);
-  }
-  if ($('#game').is(':visible')) {
-    $('#game').fadeTo(FADE_TIME, 0.1);
-  }
-  misc.closeAllTooltips();
-  gameChat.hide();
+  setShadeOpacity(0.9);
   globals.modalShowing = true;
 
   // Clear out the top navigation buttons
@@ -128,6 +103,30 @@ export const errorShow = (msg: string) => {
   }
 };
 
+// Make the page cover a certain opacity
+// If it is 0, then the page cover will be hidden
+// The second parameter is necessary to set the variable after fading finishes
+export const setShadeOpacity = (opacity: number, newModalShowing?: boolean) => {
+  const pageCover = $('#page-cover');
+  if (opacity > 0) {
+    pageCover.show();
+  }
+  // Make sure to stop any fading that was called earlier
+  pageCover.stop().fadeTo(FADE_TIME, opacity, () => {
+    if (opacity === 0) {
+      pageCover.hide();
+    }
+    if (newModalShowing !== undefined) {
+      globals.modalShowing = newModalShowing;
+    }
+  });
+};
+
+const warningClose = () => {
+  $('#warning-modal').fadeOut(FADE_TIME);
+  setShadeOpacity(0, false);
+};
+
 export const closeAll = () => {
   // Error modals cannot be closed, since we want to force the user to refresh the page
   if ($('#error-modal').is(':visible')) {
@@ -137,9 +136,6 @@ export const closeAll = () => {
   for (const modal of lobbyModals) {
     $(`#${modal}-modal`).fadeOut(FADE_TIME);
   }
-  $('#warning-modal').fadeOut(FADE_TIME);
 
-  $('#lobby').fadeTo(FADE_TIME, 1, () => {
-    globals.modalShowing = false;
-  });
+  warningClose();
 };
